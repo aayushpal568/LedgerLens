@@ -453,9 +453,15 @@ async def export_report(scan_id: str, format: str = "csv"):
     )
 
 
+@app.get("/")
+async def app_root():
+    return {"message": "LedgerLens Cloud Accounting AI API"}
+
+
 @api_router.get("/")
 async def root():
-    return {"message": "Accounting Document Checker API"}
+    return {"message": "LedgerLens Cloud Accounting AI API"}
+
 
 
 app.include_router(api_router)
