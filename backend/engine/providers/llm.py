@@ -7,7 +7,7 @@ Anthropic API routing as an interchangeable fallback.
 Credentials and models are loaded strictly from environment variables:
   - FAL_KEY / FAL_API_KEY: fal.ai API access token
   - FAL_ENDPOINT / FAL_LLM_ENDPOINT: fal.ai endpoint (default: https://fal.run/fal-ai/any-llm)
-  - CLAUDE_MODEL: Claude model on fal.ai (default: anthropic/claude-3-opus)
+  - CLAUDE_MODEL: Claude model on fal.ai (default: anthropic/claude-opus-4.6)
   - ANTHROPIC_API_KEY: Optional direct Anthropic API key for interchangeable fallback
   - ANTHROPIC_ENDPOINT: Direct Anthropic messages endpoint (default: https://api.anthropic.com/v1/messages)
   - ANTHROPIC_MODEL: Direct Anthropic model (default: claude-3-opus-20240229)
@@ -34,8 +34,8 @@ except Exception:
 
 logger = logging.getLogger("ledgerlens.llm")
 
-DEFAULT_FAL_ENDPOINT = "https://fal.run/openrouter/router/openai/v1"
-DEFAULT_CLAUDE_MODEL = "anthropic/claude-3-opus"
+DEFAULT_FAL_ENDPOINT = "https://fal.run/openrouter/router/openai/v1/chat/completions"
+DEFAULT_CLAUDE_MODEL = "anthropic/claude-opus-4.6"
 DEFAULT_ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages"
 DEFAULT_ANTHROPIC_MODEL = "claude-3-opus-20240229"
 DEFAULT_TIMEOUT = 60
