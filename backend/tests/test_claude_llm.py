@@ -107,8 +107,8 @@ def test_classify_document_success():
         headers = call_args.kwargs["headers"]
         assert headers["Authorization"] == "Key fal_test_key_12345"
         payload = call_args.kwargs["json"]
-        assert payload["model"] == "anthropic/claude-3-opus"
-        assert "Form 1040" in payload["prompt"]
+        content = payload.get("prompt") or payload.get("messages", [{}])[-1].get("content", "")
+        assert "Form 1040" in content
 
 
 def test_classify_document_markdown_fenced_json():

@@ -419,7 +419,9 @@ def test_claude_opus_fal_integration():
         args = mock_post.call_args
         assert args.kwargs["headers"]["Authorization"] == "Key fal_sec_live_998877665544332211aabbcc"
         assert args.kwargs["json"]["model"] == "anthropic/claude-3-opus"
-        assert "JPMorgan Chase" in args.kwargs["json"]["prompt"]
+        payload_data = args.kwargs["json"]
+        content_text = payload_data.get("prompt") or payload_data.get("messages", [{}])[-1].get("content", "")
+        assert "JPMorgan Chase" in content_text
         print("  [PASS] Document classification via fal.ai Claude Opus endpoint")
 
     # Test 4: Structured field extraction
