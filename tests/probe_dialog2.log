@@ -1,0 +1,238 @@
+2026-09-12T15:29:17.681Z INFO webdriver: Initiate new session using the WebDriver protocol
+2026-09-12T15:29:17.683Z INFO @wdio/utils: Connecting to existing driver at http://127.0.0.1:4444/
+2026-09-12T15:29:17.707Z INFO webdriver: [POST] http://127.0.0.1:4444/session
+2026-09-12T15:29:19.976Z INFO webdriver: COMMAND getWindowHandle()
+2026-09-12T15:29:19.977Z INFO webdriver: [GET] http://127.0.0.1:4444/session/dd1e514881837666d5d43ccfab11a6a0/window
+2026-09-12T15:29:19.982Z INFO webdriver: RESULT F15010BDC1DB25856071559E62399BE1
+2026-09-12T15:29:44.986Z INFO webdriver: COMMAND findElement("xpath", ".//button[contains(., "Continue to App") and not(.//button)]")
+2026-09-12T15:29:44.989Z INFO webdriver: [POST] http://127.0.0.1:4444/session/dd1e514881837666d5d43ccfab11a6a0/element
+2026-09-12T15:29:44.989Z INFO webdriver: DATA {
+  using: 'xpath',
+  value: './/button[contains(., "Continue to App") and not(.//button)]'
+}
+2026-09-12T15:29:45.003Z INFO webdriver: RESULT {
+  'element-6066-11e4-a52e-4f735466cecf': 'f.F15010BDC1DB25856071559E62399BE1.d.9CEA1D083BA7938891560A93FE3760DC.e.14'
+}
+2026-09-12T15:29:45.009Z INFO webdriver: COMMAND findElements("xpath", ".//button[contains(., "Continue to App") and not(.//button)]")
+2026-09-12T15:29:45.009Z INFO webdriver: [POST] http://127.0.0.1:4444/session/dd1e514881837666d5d43ccfab11a6a0/elements
+2026-09-12T15:29:45.009Z INFO webdriver: DATA {
+  using: 'xpath',
+  value: './/button[contains(., "Continue to App") and not(.//button)]'
+}
+2026-09-12T15:29:45.020Z INFO webdriver: RESULT [
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.F15010BDC1DB25856071559E62399BE1.d.9CEA1D083BA7938891560A93FE3760DC.e.14'
+  }
+]
+2026-09-12T15:29:45.026Z INFO webdriver: COMMAND elementClick("f.F15010BDC1DB25856071559E62399BE1.d.9CEA1D083BA7938891560A93FE3760DC.e.14")
+2026-09-12T15:29:45.026Z INFO webdriver: [POST] http://127.0.0.1:4444/session/dd1e514881837666d5d43ccfab11a6a0/element/f.F15010BDC1DB25856071559E62399BE1.d.9CEA1D083BA7938891560A93FE3760DC.e.14/click
+2026-09-12T15:29:45.102Z INFO webdriver: RESULT null
+2026-09-12T15:29:45.102Z INFO webdriver: COMMAND findElement("css selector", "[data-testid="nav-clients"]")
+2026-09-12T15:29:45.103Z INFO webdriver: [POST] http://127.0.0.1:4444/session/dd1e514881837666d5d43ccfab11a6a0/element
+2026-09-12T15:29:45.103Z INFO webdriver: DATA { using: 'css selector', value: '[data-testid="nav-clients"]' }
+2026-09-12T15:29:45.120Z INFO webdriver: RESULT {
+  'element-6066-11e4-a52e-4f735466cecf': 'f.F15010BDC1DB25856071559E62399BE1.d.9CEA1D083BA7938891560A93FE3760DC.e.17'
+}
+2026-09-12T15:29:45.125Z INFO webdriver: COMMAND elementClick("f.F15010BDC1DB25856071559E62399BE1.d.9CEA1D083BA7938891560A93FE3760DC.e.17")
+2026-09-12T15:29:45.125Z INFO webdriver: [POST] http://127.0.0.1:4444/session/dd1e514881837666d5d43ccfab11a6a0/element/f.F15010BDC1DB25856071559E62399BE1.d.9CEA1D083BA7938891560A93FE3760DC.e.17/click
+2026-09-12T15:29:45.193Z INFO webdriver: RESULT null
+2026-09-12T15:29:45.193Z INFO webdriver: COMMAND findElements("css selector", "[data-testid^="client-card-"]")
+2026-09-12T15:29:45.193Z INFO webdriver: [POST] http://127.0.0.1:4444/session/dd1e514881837666d5d43ccfab11a6a0/elements
+2026-09-12T15:29:45.194Z INFO webdriver: DATA { using: 'css selector', value: '[data-testid^="client-card-"]' }
+2026-09-12T15:29:45.209Z INFO webdriver: RESULT [
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.F15010BDC1DB25856071559E62399BE1.d.9CEA1D083BA7938891560A93FE3760DC.e.18'
+  },
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.F15010BDC1DB25856071559E62399BE1.d.9CEA1D083BA7938891560A93FE3760DC.e.19'
+  },
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.F15010BDC1DB25856071559E62399BE1.d.9CEA1D083BA7938891560A93FE3760DC.e.20'
+  },
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.F15010BDC1DB25856071559E62399BE1.d.9CEA1D083BA7938891560A93FE3760DC.e.21'
+  },
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.F15010BDC1DB25856071559E62399BE1.d.9CEA1D083BA7938891560A93FE3760DC.e.22'
+  },
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.F15010BDC1DB25856071559E62399BE1.d.9CEA1D083BA7938891560A93FE3760DC.e.23'
+  },
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.F15010BDC1DB25856071559E62399BE1.d.9CEA1D083BA7938891560A93FE3760DC.e.24'
+  },
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.F15010BDC1DB25856071559E62399BE1.d.9CEA1D083BA7938891560A93FE3760DC.e.25'
+  }
+]
+2026-09-12T15:29:45.224Z INFO webdriver: COMMAND elementClick("f.F15010BDC1DB25856071559E62399BE1.d.9CEA1D083BA7938891560A93FE3760DC.e.18")
+2026-09-12T15:29:45.225Z INFO webdriver: [POST] http://127.0.0.1:4444/session/dd1e514881837666d5d43ccfab11a6a0/element/f.F15010BDC1DB25856071559E62399BE1.d.9CEA1D083BA7938891560A93FE3760DC.e.18/click
+2026-09-12T15:29:45.289Z INFO webdriver: RESULT null
+2026-09-12T15:29:45.290Z INFO webdriver: COMMAND findElement("css selector", "[data-testid="pick-folder-button"]")
+2026-09-12T15:29:45.290Z INFO webdriver: [POST] http://127.0.0.1:4444/session/dd1e514881837666d5d43ccfab11a6a0/element
+2026-09-12T15:29:45.290Z INFO webdriver: DATA { using: 'css selector', value: '[data-testid="pick-folder-button"]' }
+2026-09-12T15:29:45.304Z INFO webdriver: RESULT {
+  'element-6066-11e4-a52e-4f735466cecf': 'f.F15010BDC1DB25856071559E62399BE1.d.9CEA1D083BA7938891560A93FE3760DC.e.29'
+}
+2026-09-12T15:29:45.306Z INFO webdriver: COMMAND executeScript(<fn>, <object>)
+2026-09-12T15:29:45.306Z INFO webdriver: COMMAND executeScript(<fn>, <object>)
+2026-09-12T15:29:45.306Z INFO webdriver: [POST] http://127.0.0.1:4444/session/dd1e514881837666d5d43ccfab11a6a0/execute/sync
+2026-09-12T15:29:45.307Z INFO webdriver: DATA {
+  script: 'checkVisibility(...) [614 bytes]',
+  args: [
+    {
+      'element-6066-11e4-a52e-4f735466cecf': 'f.F15010BDC1DB25856071559E62399BE1.d.9CEA1D083BA7938891560A93FE3760DC.e.29',
+      ELEMENT: 'f.F15010BDC1DB25856071559E62399BE1.d.9CEA1D083BA7938891560A93FE3760DC.e.29'
+    },
+    {
+      withinViewport: false,
+      contentVisibilityAuto: true,
+      opacityProperty: true,
+      visibilityProperty: true
+    }
+  ]
+}
+2026-09-12T15:29:45.307Z INFO webdriver: [POST] http://127.0.0.1:4444/session/dd1e514881837666d5d43ccfab11a6a0/execute/sync
+2026-09-12T15:29:45.307Z INFO webdriver: DATA {
+  script: '\n' +
+    '            function webdriverioPolyfill() {\n' +
+    '  var __defProp = Object.defineProperty;\n' +
+    '  var __name = function(target, _value) {\n' +
+    '    return __defProp(target, "name", { value: _value, configurable: true });\n' +
+    '  };\n' +
+    '  var __globalThis = typeof globalThis === "object" && globalThis || typeof window === "object" && window;\n' +
+    '  __globalThis.__name = __name;\n' +
+    '}\n' +
+    '            webdriverioPolyfill();\n' +
+    '            return (function(elem) {\n' +
+    '      try {\n' +
+    '        const style = window.getComputedStyle(elem);\n' +
+    '        return { value: style?.display ?? "" };\n' +
+    '      } catch {\n' +
+    '        if (typeof elem.isConnected === "boolean" && !elem.isConnected) {\n' +
+    '          throw new Error("stale element reference: element is not attached to the page document");\n' +
+    '        }\n' +
+    '        return { value: "" };\n' +
+    '      }\n' +
+    '    }).apply(null, arguments)\n' +
+    '        ',
+  args: [
+    {
+      'element-6066-11e4-a52e-4f735466cecf': 'f.F15010BDC1DB25856071559E62399BE1.d.9CEA1D083BA7938891560A93FE3760DC.e.29',
+      ELEMENT: 'f.F15010BDC1DB25856071559E62399BE1.d.9CEA1D083BA7938891560A93FE3760DC.e.29'
+    }
+  ]
+}
+2026-09-12T15:29:45.321Z INFO webdriver: RESULT true
+2026-09-12T15:29:45.326Z INFO webdriver: RESULT { value: 'inline-flex' }
+2026-09-12T15:29:45.327Z INFO webdriver: COMMAND elementClick("f.F15010BDC1DB25856071559E62399BE1.d.9CEA1D083BA7938891560A93FE3760DC.e.29")
+2026-09-12T15:29:45.327Z INFO webdriver: [POST] http://127.0.0.1:4444/session/dd1e514881837666d5d43ccfab11a6a0/element/f.F15010BDC1DB25856071559E62399BE1.d.9CEA1D083BA7938891560A93FE3760DC.e.29/click
+2026-09-12T15:29:45.376Z INFO webdriver: RESULT null
+2026-09-12T15:29:45.883Z INFO webdriver: COMMAND findElement("css selector", "body")
+2026-09-12T15:29:45.883Z INFO webdriver: [POST] http://127.0.0.1:4444/session/dd1e514881837666d5d43ccfab11a6a0/element
+2026-09-12T15:29:45.884Z INFO webdriver: DATA { using: 'css selector', value: 'body' }
+2026-09-12T15:29:45.896Z INFO webdriver: RESULT {
+  'element-6066-11e4-a52e-4f735466cecf': 'f.F15010BDC1DB25856071559E62399BE1.d.9CEA1D083BA7938891560A93FE3760DC.e.32'
+}
+2026-09-12T15:29:45.909Z INFO webdriver: COMMAND getElementText("f.F15010BDC1DB25856071559E62399BE1.d.9CEA1D083BA7938891560A93FE3760DC.e.32")
+2026-09-12T15:29:45.910Z INFO webdriver: [GET] http://127.0.0.1:4444/session/dd1e514881837666d5d43ccfab11a6a0/element/f.F15010BDC1DB25856071559E62399BE1.d.9CEA1D083BA7938891560A93FE3760DC.e.32/text
+2026-09-12T15:29:45.999Z INFO webdriver: RESULT LedgerLens
+Document Checker
+Active client
+Final UI QA & Special 1789226617466
+100% Local · No Cloud Decisions
+Overview & Firm
+Client Directory
+Scan Workspace
+Checklist Templates
+Exception Review
+File Diff Inspector
+Reports & Exports
+System Health
+Read-only engine. Never deletes, renames, moves, or emails. All actions need human review.
+Scan Workspace
+Final UI QA & Special 1789226617466 · Small Business
+Final UI QA & Special 1789226617466
+Final UI QA & Special 1789226296926
+Final UI QA & Special 1789226208696
+E2E_Test_Client_1789223621523
+Production_Client_1789223560419
+Security_Test_Client
+Production_Client_1789223406776
+Upload_Security_Test
+Scan Settings
+CHECKLIST TEMPLATE
+No checklist (skip missing-doc check)
+Corporation Year-End (Corporation)
+Individual Tax Return (Individual)
+Small Business Package (Small Business)
+EXPECTED PERIOD (YEAR)
+Any period
+2026
+2025
+2024
+2023
+2022
+2021
+2020
+2019
+Scan a Local Folder
+Desktop
+Reads files directly from your computer — nothing is uploaded or copied.
+Choose Folder
+Scan This Folder
+Large folders are queued and partially scanned. Locked or inaccessible files are skipped safely — the scan never freezes.
+PAGE_TEXT_IMMEDIATE= LedgerLens
+Document Checker
+Active client
+Final UI QA & Special 1789226617466
+100% Local · No Cloud Decisions
+Overview & Firm
+Client Directory
+Scan Workspace
+Checklist Templates
+Exception Review
+File Diff Inspector
+Reports & Exports
+System Health
+Read-only engine. Never deletes, renames, moves, or emails. All actions need human review.
+Scan Workspace
+Final UI QA & Special 1789226617466 · Small Business
+Final UI QA & Special 1789226617466
+Final UI QA & Special 1789226296926
+Final UI QA & Special 1789226208696
+E2E_Test_Client_1789223621523
+Production_Client_1789223560419
+Security_Test_Client
+Production_Client_1789223406776
+Upload_Security_Test
+Scan Settings
+CHECKLIST TEMPLATE
+No checklist (skip missing-doc check)
+Corporation Year-End (Corporation)
+Individual Tax Return (Individual)
+Small Business Package (Small Business)
+EXPECTED PERIOD (YEAR)
+Any period
+2026
+2025
+2024
+2023
+2022
+2021
+2020
+2019
+Scan a Local Folder
+Desktop
+Reads files directly from your computer — nothing is uploaded or copied.
+Choose Folder
+Scan This Folder
+Large folders are queued and partially scanned. Locked or inaccessible files are skipped safely — the scan never freezes.
+Traceback (most recent call last):
+  File "C:\Users\acer\Desktop\LedgerLens\o\LedgerLens-main\tests\select_folder.py", line 22, in <module>
+    raise RuntimeError(f"Folder picker dialog was not found; windows={visible}")
+RuntimeError: Folder picker dialog was not found; windows=[('Taskbar', 'Shell_TrayWnd'), ('LedgerLens � Document Checker', 'Tauri Window'), ('C:\\Program Files (x86)\\Microsoft\\EdgeWebView\\Application\\152.0.4191.66\\msedgewebview2.exe', 'ConsoleWindowClass'), ('', 'Tao Thread Event Target'), ('Audit LedgerLens production code', 'Chrome_WidgetWin_1'), ('New Tab - Brave', 'Chrome_WidgetWin_1'), ('LedgerLens Codebase Inspe...', 'Chrome_WidgetWin_1'), ('', 'InputSiteWindowClass'), ('Program Manager', 'Progman')]
+DIALOG_PROBE_FAILED
+2026-09-12T15:30:05.734Z INFO webdriver: COMMAND deleteSession()
+2026-09-12T15:30:05.734Z INFO webdriver: [DELETE] http://127.0.0.1:4444/session/dd1e514881837666d5d43ccfab11a6a0
+2026-09-12T15:30:05.781Z INFO webdriver: RESULT null

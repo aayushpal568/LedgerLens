@@ -1,0 +1,165 @@
+{
+  "project_title": "Accounting Document Checker (Windows Desktop V1)",
+  "app_type": "hybrid_fullstack",
+  "archetype": "THE PERFORMANCE PRO / SWISS & HIGH-CONTRAST (Local-First Precision Desktop App for Accountants)",
+  "theme": "Light & Dark Toggle Support (Default: Crisp Slate Light for High Precision, with Deep Navy Dark Mode for Night Audits)",
+  "instructions_to_main_agent": [
+    "Build a local-first Windows Desktop-style productivity application for accounting firms.",
+    "Workflow steps must be seamlessly supported: Firm Setup -> Client List/Creation -> Local Folder Workspace Selection -> Checklist Template Manager -> Scan Engine with Real-time Progress & Skipped File Warnings -> Review Center (Exception Handling) -> File Comparison View -> Reports Export (CSV / Excel / PDF).",
+    "Never simulate file deletion, auto-renaming, or external emailing. Always highlight the 'Privacy-First: 100% Local Execution - Files Never Leave This Computer' banner in the top navigation or status bar.",
+    "Supported extensions badge: PDF, JPG, JPEG, PNG, TIFF, DOCX, XLSX, CSV.",
+    "Review Center must be optimized purely for exception handling (not casual browsing), organizing issues into 6 core categories: Exact Duplicates, Possible Duplicates, Missing Docs, Wrong Period Docs, Wrong Document Types, Unreadable Files.",
+    "Action items for flagged exceptions: Mark 'Keep', 'Keep Both', 'Ignore', 'Review Later' with notes and confidence ratings.",
+    "Provide a split-pane / side-by-side File Comparison View for duplicate or wrong-period files with metadata diffing and document preview card.",
+    "Include a simulated desktop app title bar (Window controls: Minimize, Maximize, Close, Local Sync Status, Offline Verified Shield).",
+    "All interactive elements and data indicators MUST have strict 'data-testid' attributes in kebab-case format (e.g., data-testid='start-scan-button', data-testid='client-selector-dropdown', data-testid='privacy-status-indicator')."
+  ],
+  "UNIVERSAL GUIDELINES FOR MAIN AGENT": [
+    "You tend to converge toward generic, 'on distribution' outputs. In frontend design, this creates what users call the 'AI slop' aesthetic. Avoid this: make creative, distinctive frontends that surprise and delight.",
+    "Dark colors look good when used independently without gradients. DO NOT use dark colors as gradients.",
+    "Don't make generic centered layouts, simplistic gradients, and uniform styling.",
+    "Create depth through layered design elements with z-index hierarchy.",
+    "Use glass-morphism effects with backdrop filters (12-24px blur) where appropriate (e.g., sticky desktop headers, modal overlays).",
+    "You MUST NOT apply universal transition (e.g. transition: all). Always specify explicit properties like transition: transform 0.2s ease, opacity 0.2s ease.",
+    "You MUST NOT center align the app container (.App { text-align: center; }). Preserve standard ergonomic left-to-right desktop reading flow.",
+    "Always use modern button styles like pill-shaped, or crisp sharp desktop buttons with stateful interactions and high accessibility.",
+    "NEVER use AI assistant Emoji characters like 🤖🧠💭💡🔮🎯 for UI icons. Use lucide-react icons exclusively.",
+    "Every interaction needs micro-animations - hover states, transitions, slide-ins, and progress pulses. Static = dead.",
+    "Use 2-3x generous spacing for desktop toolbars, split panels, and sidebar navigation. Cramped designs look cheap.",
+    "Subtle technical grid borders (1px border-border), clean status bars, confidence chips, and audit trail timelines elevate this app to top 1% quality.",
+    "All interactive and key informational elements MUST include data-testid attribute for stable automated test verification."
+  ],
+  "colors": {
+    "palette_archetype": "Precision Slate & Accounting Emerald / Crimson Accent",
+    "light": {
+      "background": "#F8FAFC",
+      "surface": "#FFFFFF",
+      "surface_elevated": "#F1F5F9",
+      "border": "#E2E8F0",
+      "text_primary": "#0F172A",
+      "text_secondary": "#475569",
+      "text_muted": "#64748B",
+      "brand_primary": "#0F766E",
+      "brand_primary_hover": "#0D9488",
+      "brand_secondary": "#1E293B",
+      "accent_success": "#16A34A",
+      "accent_warning": "#D97706",
+      "accent_danger": "#DC2626",
+      "accent_info": "#2563EB",
+      "privacy_shield": "#059669"
+    },
+    "dark": {
+      "background": "#090D16",
+      "surface": "#111827",
+      "surface_elevated": "#1F2937",
+      "border": "#1F293D",
+      "text_primary": "#F8FAFC",
+      "text_secondary": "#94A3B8",
+      "text_muted": "#64748B",
+      "brand_primary": "#14B8A6",
+      "brand_primary_hover": "#2DD4BF",
+      "brand_secondary": "#F8FAFC",
+      "accent_success": "#22C55E",
+      "accent_warning": "#F59E0B",
+      "accent_danger": "#EF4444",
+      "accent_info": "#3B82F6",
+      "privacy_shield": "#10B981"
+    },
+    "category_badges": {
+      "exact_duplicate": { "bg": "#FEF2F2", "text": "#991B1B", "border": "#FCA5A5" },
+      "possible_duplicate": { "bg": "#FFFBEB", "text": "#92400E", "border": "#FDE68A" },
+      "missing_doc": { "bg": "#EFF6FF", "text": "#1E40AF", "border": "#BFDBFE" },
+      "wrong_period": { "bg": "#F5F3FF", "text": "#5B21B6", "border": "#DDD6FE" },
+      "wrong_type": { "bg": "#FDF2F8", "text": "#9D174D", "border": "#FBCFE8" },
+      "unreadable": { "bg": "#F3F4F6", "text": "#1F2937", "border": "#D1D5DB" }
+    }
+  },
+  "typography": {
+    "headline_font": "Outfit, system-ui, sans-serif",
+    "body_font": "Inter, system-ui, sans-serif",
+    "mono_font": "JetBrains Mono, SFMono-Regular, Consolas, monospace",
+    "font_weights": {
+      "light": 300,
+      "regular": 400,
+      "medium": 500,
+      "semibold": 600,
+      "bold": 700
+    },
+    "scale": {
+      "app_title": "text-lg font-bold tracking-tight",
+      "h1": "text-3xl font-extrabold tracking-tight sm:text-4xl",
+      "h2": "text-2xl font-bold tracking-tight",
+      "h3": "text-lg font-semibold",
+      "h4": "text-base font-medium",
+      "body": "text-sm leading-relaxed",
+      "caption": "text-xs font-medium text-muted-foreground",
+      "mono_data": "font-mono text-xs tracking-wider"
+    }
+  },
+  "layout_and_architecture": {
+    "structure": "Windows Desktop 3-Pane Layout with Titlebar Header, Left Navigation Sidebar, Center Workspace / Exception Review Grid, Right Evidence & Action Inspector, and Bottom Local Status Bar.",
+    "desktop_header": {
+      "window_controls": "Minimize (-), Maximize ([ ]), Close (X)",
+      "privacy_indicator": "Green Shield Badge: '100% Local Sandbox — Zero Cloud Uploads'",
+      "firm_selector": "Firm Setup & Multi-Client Switcher Dropdown"
+    },
+    "navigation_tabs": [
+      { "id": "dashboard", "label": "Overview & Firm Setup", "icon": "Building2" },
+      { "id": "clients", "label": "Client Directory & Folders", "icon": "Users" },
+      { "id": "scan_workspace", "label": "Scan Workspace", "icon": "FolderSearch" },
+      { "id": "checklists", "label": "Checklist Templates", "icon": "FileCheck2" },
+      { "id": "review_center", "label": "Exception Review Center", "icon": "ShieldAlert" },
+      { "id": "file_compare", "label": "File Diff Inspector", "icon": "Columns2" },
+      { "id": "reports", "label": "Reports & Audit Exports", "icon": "FileSpreadsheet" }
+    ],
+    "review_center_features": [
+      "Top Category Summary Cards with counters (Exact Duplicates, Possible Duplicates, Missing Docs, Wrong Period, Wrong Type, Unreadable)",
+      "Filter toolbar: By Category, Confidence (High/Med/Low), Review Status (Unreviewed/Keep/Keep Both/Ignore/Review Later), Search by Filename",
+      "Batch action bar: Select all -> Mark Ignore, Mark Keep Both, Export Selected",
+      "Split View: Left list of exceptions with severity badges; Right side detailed evidence card with side-by-side metadata match and suggested action rationale."
+    ]
+  },
+  "components": {
+    "primary_buttons": "Pill or sharp rounded-md with hover:shadow-md active:scale-[0.99] transition-all",
+    "badge_confidence": "High (90-100%): Emerald badge | Medium (60-89%): Amber badge | Low (<60%): Slate badge",
+    "file_type_icons": {
+      "PDF": "FileText (Red tint)",
+      "XLSX": "Spreadsheet (Green tint)",
+      "DOCX": "FileCode (Blue tint)",
+      "CSV": "Table (Teal tint)",
+      "IMAGES": "Image (Purple tint)"
+    },
+    "toast_notifications": "Use Sonner for scan progress completion, batch status updates, and CSV/Excel/PDF export confirmation."
+  },
+  "data_testid_conventions": {
+    "pattern": "kebab-case description indicating section and action",
+    "examples": [
+      "data-testid='app-titlebar'",
+      "data-testid='privacy-status-badge'",
+      "data-testid='client-selector'",
+      "data-testid='folder-browse-button'",
+      "data-testid='checklist-template-select'",
+      "data-testid='start-scan-button'",
+      "data-testid='scan-progress-bar'",
+      "data-testid='skipped-files-alert'",
+      "data-testid='exception-category-exact-duplicates'",
+      "data-testid='exception-card-item'",
+      "data-testid='mark-keep-button'",
+      "data-testid='mark-keep-both-button'",
+      "data-testid='mark-ignore-button'",
+      "data-testid='mark-review-later-button'",
+      "data-testid='compare-view-toggle'",
+      "data-testid='export-csv-button'",
+      "data-testid='export-pdf-button'"
+    ]
+  },
+  "image_urls": [],
+  "3d_and_motion": {
+    "libraries": ["framer-motion", "lucide-react", "recharts"],
+    "motion_patterns": {
+      "page_transition": "Opacity fade (0.15s) and subtle y-offset slide (8px)",
+      "scan_pulse": "Continuous glowing pulse animation on active scan radar indicator",
+      "progress_bar": "Smooth width transition with easeOut transition on scanning progress percentage"
+    }
+  }
+}

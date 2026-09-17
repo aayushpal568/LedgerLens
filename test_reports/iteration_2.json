@@ -1,0 +1,31 @@
+{
+  "summary": "Refactor-safety regression for engine/ split into interfaces + ScanEngine + providers. Backend: reran existing pytest suite (/app/backend/tests/backend_test.py) against the live external URL — 8/8 tests PASS (firm GET/PUT, clients CRUD, seeded templates + template CRUD, file upload/list/soft-delete, full scan pipeline queued->scanning->completed with exact_duplicate/wrong_period/missing_doc/unreadable counts, findings PATCH, and CSV/XLSX/PDF report exports all non-empty). Engine unit tests (11/11 at /app/backend/tests/test_engine.py) were left alone per instruction. Frontend: loaded / sanity-checked — LedgerLens shell renders, no page/console errors, navigation buttons behave correctly (Scan/Review/Reports are correctly disabled until a client is selected — unchanged behavior from iter_1). run_detection signature + output shape confirmed identical: no consumer changes in server.py were needed. No regressions detected.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "ScanWorkspace / all Select components", "issues": ["Pre-existing (iter_1): Emergent ve-dynamic wrapper injects <span> inside <option> triggering hydration warnings. Not caused by this refactor. Non-blocking."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/test_engine.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "engine/scan_engine.py + providers/ split is clean and keeps run_detection backward-compatible via delegation in detect.py — good separation for the future Tauri/local build.",
+    "PaddleOCRProvider and OllamaLLMProvider are inactive stubs as expected; ensure they are behind a feature flag (or import-guarded) so accidental instantiation in the web build doesn't require paddleocr/ollama deps.",
+    "Pre-existing (iter_1, not introduced now): server.py _run_scan still uses asyncio.get_event_loop() (prefer get_running_loop); list_clients still N+1; delete_client not atomic. Refactor didn't address these — main agent may want to schedule.",
+    "Consider adding a lightweight adapter-level unit test for LocalPathFileSource and NoOp providers so future changes to the interface contract fail fast."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "N/A - single user, no auth",
+  "seed_data_creation": "backend_test.py fixtures create+teardown TEST_Regression Inc etc. No lingering seed data added by this run.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Refactor iteration only — no user-facing changes. Regression suite is /app/backend/tests/backend_test.py (8 API tests) + /app/backend/tests/test_engine.py (11 engine unit tests). Both green. Frontend flow was fully covered in iteration_1; only a smoke/nav re-check was done here.",
+  "rca of the issue": "No issues."
+}

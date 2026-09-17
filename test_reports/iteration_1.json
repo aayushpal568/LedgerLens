@@ -1,0 +1,31 @@
+{
+  "summary": "Full regression on Accounting Document Checker (LedgerLens). Backend: 8/8 pytest cases pass — firm GET/PUT, clients CRUD, seeded templates + CRUD, file upload/list/soft-delete, end-to-end scan pipeline (queued -> scanning -> completed with counts for exact_duplicate=1, wrong_period=1, missing_doc>=1, unreadable=1), finding PATCH, and CSV/XLSX/PDF report exports. Frontend: complete UI flow verified — firm save, client create, workspace file upload via hidden input, Small Business template + expected period 2024, scan progress bar completes, Review Center shows 6 category cards + 8 exception cards, mark-keep persists (Review progress shows Keep=1), Reports page CSV export triggers a real download. No blocking issues found.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "ScanWorkspace / all Select components", "issues": ["React hydration warning: <span> cannot be a child of <option>. Emergent's ve-dynamic wrapper injects a span inside <option> elements. Non-blocking runtime, but pollutes console with hydration errors — consider suppressing dynamic wrappers on <option> children."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py list_clients does N+1 queries (count_documents + find_one per client) — fine for small firms, but consider aggregation for scale.",
+    "server.py _run_scan uses asyncio.get_event_loop() inside an async task; asyncio.get_running_loop() is preferred and safer in 3.11+.",
+    "Scan progress push is fire-and-forget via run_coroutine_threadsafe with no error handling — if Mongo hiccups mid-scan the future silently swallows the error.",
+    "delete_client is not truly atomic; if the process dies mid-delete, findings/scans/files could be orphaned. Consider bulk_write or transaction.",
+    "Frontend Select renders <option> with dynamic text; Emergent wrapper generates <span> inside option causing hydration warnings — likely tooling issue, not app code."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "N/A - single user, no auth",
+  "seed_data_creation": "Created TEST_Regression Inc + TEST_UI Client (auto-cleaned by fixture teardown for backend; UI client left in DB — safe as it's prefixed TEST_).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "backend_test.py covers all main endpoints incl. full scan pipeline that requires REACT_APP_BACKEND_URL env var (set from frontend/.env). Run: `REACT_APP_BACKEND_URL=<url> pytest backend/tests/backend_test.py -v`. Scan test creates duplicates + wrong-period + image (unreadable) files and asserts counts.",
+  "rca of the issue": "No blocking issues. Only a cosmetic hydration console warning from Emergent's ve-dynamic wrapper injecting <span> inside <option> elements across ScanWorkspace / Reports / Client pickers."
+}

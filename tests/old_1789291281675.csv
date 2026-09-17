@@ -1,0 +1,26 @@
+﻿Category,Issue,Files,Confidence,Review Status,Notes,Evidence
+Possible Duplicate,"""gstr2b_recon_truth.csv"" looks similar to ""gstr2b_recon_truth.xlsx""",gstr2b_recon_truth.csv; gstr2b_recon_truth.xlsx,97% (high),Unreviewed,,Document contents are 97% similar but the files are not identical.
+Possible Duplicate,"""purchase_register.csv"" looks similar to ""purchase_register.xlsx""",purchase_register.csv; purchase_register.xlsx,98% (high),Unreviewed,,Document contents are 98% similar but the files are not identical.
+Possible Duplicate,"""gl_extract.csv"" looks similar to ""gl_extract.xlsx""",gl_extract.csv; gl_extract.xlsx,96% (high),Unreviewed,,Document contents are 96% similar but the files are not identical.
+Possible Duplicate,"""lease_master.csv"" looks similar to ""lease_master.xlsx""",lease_master.csv; lease_master.xlsx,95% (high),Unreviewed,,Document contents are 95% similar but the files are not identical.
+Possible Duplicate,"""chart_of_accounts.csv"" looks similar to ""chart_of_accounts.xlsx""",chart_of_accounts.csv; chart_of_accounts.xlsx,97% (high),Unreviewed,,Document contents are 97% similar but the files are not identical.
+Possible Duplicate,"""lease_schedule.csv"" looks similar to ""lease_schedule.xlsx""",lease_schedule.csv; lease_schedule.xlsx,99% (high),Keep,,Document contents are 99% similar but the files are not identical.
+Possible Duplicate,"""salary_register_202606.csv"" looks similar to ""salary_register_202606.xlsx""",salary_register_202606.csv; salary_register_202606.xlsx,99% (high),Keep Both,,Document contents are 99% similar but the files are not identical.
+Possible Duplicate,"""purchase_register_books.csv"" looks similar to ""purchase_register_books.xlsx""",purchase_register_books.csv; purchase_register_books.xlsx,99% (high),Ignore,,Document contents are 99% similar but the files are not identical.
+Possible Duplicate,"""vendor_master.csv"" looks similar to ""vendor_master.xlsx""",vendor_master.csv; vendor_master.xlsx,98% (high),Unreviewed,,Document contents are 98% similar but the files are not identical.
+Possible Duplicate,"""salary_master.csv"" looks similar to ""salary_master.xlsx""",salary_master.csv; salary_master.xlsx,99% (high),Unreviewed,,Document contents are 99% similar but the files are not identical.
+Possible Duplicate,"""INV-202604-023.pdf"" looks similar to ""INV-202604-035.pdf""",INV-202604-023.pdf; INV-202604-035.pdf,97% (high),Unreviewed,,Document contents are 97% similar but the files are not identical.
+Possible Duplicate,"""INV-202604-023.pdf"" looks similar to ""INV-202604-049.pdf""",INV-202604-023.pdf; INV-202604-049.pdf,98% (high),Unreviewed,,Document contents are 98% similar but the files are not identical.
+Possible Duplicate,"""INV-202604-025.pdf"" looks similar to ""INV-202604-019.pdf""",INV-202604-025.pdf; INV-202604-019.pdf,88% (medium),Unreviewed,,Document contents are 88% similar but the files are not identical.
+Possible Duplicate,"""INV-202604-040.pdf"" looks similar to ""INV-202604-059.pdf""",INV-202604-040.pdf; INV-202604-059.pdf,85% (medium),Unreviewed,,Document contents are 85% similar but the files are not identical.
+Possible Duplicate,"""INV-202604-035.pdf"" looks similar to ""INV-202604-049.pdf""",INV-202604-035.pdf; INV-202604-049.pdf,98% (high),Unreviewed,,Document contents are 98% similar but the files are not identical.
+Wrong Period,"""gl_extract.csv"" appears to be from 2024, not 2026",gl_extract.csv,75% (medium),Review Later,Final independent UI verification < > & =SUM(A1:A2) @test,Detected period 2024 does not match the expected period 2026.
+Wrong Period,"""lease_master.csv"" appears to be from 2025, not 2026",lease_master.csv,75% (medium),Unreviewed,,Detected period 2025 does not match the expected period 2026.
+Wrong Period,"""chart_of_accounts.csv"" appears to be from 2000, not 2026",chart_of_accounts.csv,75% (medium),Unreviewed,,Detected period 2000 does not match the expected period 2026.
+Wrong Period,"""lease_schedule.csv"" appears to be from 2025, not 2026",lease_schedule.csv,75% (medium),Unreviewed,,Detected period 2025 does not match the expected period 2026.
+Wrong Period,"""salary_master.csv"" appears to be from 2022, not 2026",salary_master.csv,75% (medium),Unreviewed,,Detected period 2022 does not match the expected period 2026.
+Wrong Period,"""chart_of_accounts.xlsx"" appears to be from 2000, not 2026",chart_of_accounts.xlsx,75% (medium),Unreviewed,,Detected period 2000 does not match the expected period 2026.
+Wrong Period,"""lease_master.xlsx"" appears to be from 2025, not 2026",lease_master.xlsx,75% (medium),Unreviewed,,Detected period 2025 does not match the expected period 2026.
+Wrong Period,"""salary_master.xlsx"" appears to be from 2022, not 2026",salary_master.xlsx,75% (medium),Unreviewed,,Detected period 2022 does not match the expected period 2026.
+Wrong Period,"""lease_schedule.xlsx"" appears to be from 2025, not 2026",lease_schedule.xlsx,75% (medium),Unreviewed,,Detected period 2025 does not match the expected period 2026.
+Wrong Period,"""gl_extract.xlsx"" appears to be from 2024, not 2026",gl_extract.xlsx,75% (medium),Unreviewed,,Detected period 2024 does not match the expected period 2026.

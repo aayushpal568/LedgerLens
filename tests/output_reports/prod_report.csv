@@ -1,0 +1,6 @@
+﻿Category,Issue,Files,Confidence,Review Status,Notes,Evidence
+Exact Duplicate,"2 identical copies of ""chase_bank_statement_2024_01.csv""",chase_bank_statement_2024_01.csv; chase_bank_statement_2024_01_copy.csv,100% (high),Keep,,Files are byte-for-byte identical (matching SHA-256 hash).
+Possible Duplicate,"""chase_bank_statement_2024_01_revised.csv"" looks similar to ""chase_bank_statement_2024_01.csv""",chase_bank_statement_2024_01_revised.csv; chase_bank_statement_2024_01.csv,84% (medium),Ignore,,Document contents are 84% similar but the files are not identical.
+Possible Duplicate,"""chase_bank_statement_2024_01_revised.csv"" looks similar to ""chase_bank_statement_2024_01_copy.csv""",chase_bank_statement_2024_01_revised.csv; chase_bank_statement_2024_01_copy.csv,84% (medium),Unreviewed,,Document contents are 84% similar but the files are not identical.
+Unreadable File,"""empty_expense_ledger.csv"" could not be read",empty_expense_ledger.csv,90% (high),Keep Both,,CSV contains no data
+Wrong Period,"""annual_p_and_l_report_2021.csv"" appears to be from 2021, not 2024",annual_p_and_l_report_2021.csv,75% (medium),Review Later,Production UI Verified: Checked by senior auditor.,Detected period 2021 does not match the expected period 2024.

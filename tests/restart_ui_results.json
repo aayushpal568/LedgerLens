@@ -1,0 +1,26 @@
+[
+  {
+    "name": "Backend reconnects in fresh UI session",
+    "pass": true
+  },
+  {
+    "name": "Keep survives full restart",
+    "pass": true
+  },
+  {
+    "name": "Keep Both survives full restart",
+    "pass": true
+  },
+  {
+    "name": "Ignore survives full restart",
+    "pass": true
+  },
+  {
+    "name": "Review Later survives full restart",
+    "pass": true
+  },
+  {
+    "name": "Reviewer note survives full restart",
+    "pass": true
+  }
+]

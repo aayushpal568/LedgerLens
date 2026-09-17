@@ -1,0 +1,29 @@
+{
+  "summary": "Iteration 3 backend + frontend regression after engine concurrency/cancel/LSH changes and new POST /api/scans/{scan_id}/cancel endpoint. Extended /app/backend/tests/backend_test.py with 2 new tests (test_cancel_scan_404, test_cancel_scan_on_live_scan). Ran full pytest against the live external URL: 10/10 PASS in ~9.7s. Covered: firm GET/PUT, clients CRUD + 404, seeded templates + template CRUD, file upload/list/soft-delete (incl. two byte-identical CSVs, profit_and_loss_2022.csv, receipt.png), full scan pipeline queued->scanning->completed with progress=100 and counts.exact_duplicate>=1, wrong_period>=1, missing_doc>=1, unreadable>=1, findings PATCH persists status='keep', CSV/XLSX/PDF reports non-empty with correct content-types, and NEW cancel endpoint: 404 on unknown scan_id, {ok:true} on live scan with terminal state 'completed' (small scan finished before cancel took effect — acceptable per spec, endpoint responded correctly and did not break the scan). Frontend smoke: LedgerLens loads on external URL, all nav data-testids present (nav-dashboard/clients/scan_workspace/checklists/review_center/file_compare/reports), Firm Setup shows persisted TEST_Firm from backend tests, no console errors. No regressions detected.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Select components (pre-existing)", "issues": ["Emergent ve-dynamic wrapper injects <span> inside <option> causing hydration warnings — pre-existing, not from this iteration."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py cancel_scan: returns 'cancelling' status message even when scan is already completed/error (not in queued/scanning). Harmless but the JSON status field is misleading; consider returning the actual current status.",
+    "CANCEL_REQUESTS is a module-level set with no bounds — fine for single-user local app but should be pruned on scan completion/error (currently only discarded in _run_scan finally). Verified discard is called in success/error paths.",
+    "Pre-existing (not this iter): _run_scan uses asyncio.get_event_loop() (deprecated preferred: get_running_loop()); list_clients N+1; delete_client not atomic. Main agent may schedule cleanup."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "N/A - single user, no auth",
+  "seed_data_creation": "backend_test.py fixtures create+teardown TEST_Regression Inc client and TEST_Tpl template. TEST_Firm remains from firm PUT test (single-record entity, expected).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Regression suite is now 10 tests in /app/backend/tests/backend_test.py incl. cancel endpoint (404 + live). Engine unit + scale tests (18) exist at test_engine.py and test_engine_scale.py — do NOT re-run per instruction. Frontend flow was fully validated in iteration_1; only smoke-check needed unless UI changes.",
+  "rca of the issue": "No issues found."
+}

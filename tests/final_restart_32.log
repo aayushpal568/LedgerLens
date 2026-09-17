@@ -1,0 +1,658 @@
+2026-09-13T09:20:52.635Z INFO webdriver: Initiate new session using the WebDriver protocol
+2026-09-13T09:20:52.637Z INFO @wdio/utils: Connecting to existing driver at http://127.0.0.1:4444/
+2026-09-13T09:20:52.653Z INFO webdriver: [POST] http://127.0.0.1:4444/session
+2026-09-13T09:20:56.560Z INFO webdriver: COMMAND getWindowHandle()
+2026-09-13T09:20:56.561Z INFO webdriver: [GET] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/window
+2026-09-13T09:20:56.724Z INFO webdriver: RESULT C7C0DEA2D13399DD8C3C2605DDD6AD0E
+[PASS] Backend reconnects 
+2026-09-13T09:21:16.893Z INFO webdriver: COMMAND findElement("xpath", ".//button[contains(., "Continue to App") and not(.//button)]")
+2026-09-13T09:21:16.893Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/element
+2026-09-13T09:21:16.893Z INFO webdriver: DATA {
+  using: 'xpath',
+  value: './/button[contains(., "Continue to App") and not(.//button)]'
+}
+2026-09-13T09:21:16.954Z INFO webdriver: RESULT {
+  'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.14'
+}
+2026-09-13T09:21:16.962Z INFO webdriver: COMMAND findElements("xpath", ".//button[contains(., "Continue to App") and not(.//button)]")
+2026-09-13T09:21:16.962Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/elements
+2026-09-13T09:21:16.962Z INFO webdriver: DATA {
+  using: 'xpath',
+  value: './/button[contains(., "Continue to App") and not(.//button)]'
+}
+2026-09-13T09:21:16.977Z INFO webdriver: RESULT [
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.14'
+  }
+]
+2026-09-13T09:21:16.981Z INFO webdriver: COMMAND elementClick("f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.14")
+2026-09-13T09:21:16.981Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/element/f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.14/click
+2026-09-13T09:21:17.112Z INFO webdriver: RESULT null
+2026-09-13T09:21:17.113Z INFO webdriver: COMMAND findElement("css selector", "[data-testid="nav-clients"]")
+2026-09-13T09:21:17.113Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/element
+2026-09-13T09:21:17.113Z INFO webdriver: DATA { using: 'css selector', value: '[data-testid="nav-clients"]' }
+2026-09-13T09:21:17.132Z INFO webdriver: RESULT {
+  'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.15'
+}
+2026-09-13T09:21:17.135Z INFO webdriver: COMMAND executeScript(<fn>, <object>)
+2026-09-13T09:21:17.136Z INFO webdriver: COMMAND executeScript(<fn>, <object>)
+2026-09-13T09:21:17.136Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/execute/sync
+2026-09-13T09:21:17.137Z INFO webdriver: DATA {
+  script: 'checkVisibility(...) [614 bytes]',
+  args: [
+    {
+      'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.15',
+      ELEMENT: 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.15'
+    },
+    {
+      withinViewport: false,
+      contentVisibilityAuto: true,
+      opacityProperty: true,
+      visibilityProperty: true
+    }
+  ]
+}
+2026-09-13T09:21:17.139Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/execute/sync
+2026-09-13T09:21:17.140Z INFO webdriver: DATA {
+  script: '\n' +
+    '            function webdriverioPolyfill() {\n' +
+    '  var __defProp = Object.defineProperty;\n' +
+    '  var __name = function(target, _value) {\n' +
+    '    return __defProp(target, "name", { value: _value, configurable: true });\n' +
+    '  };\n' +
+    '  var __globalThis = typeof globalThis === "object" && globalThis || typeof window === "object" && window;\n' +
+    '  __globalThis.__name = __name;\n' +
+    '}\n' +
+    '            webdriverioPolyfill();\n' +
+    '            return (function(elem) {\n' +
+    '      try {\n' +
+    '        const style = window.getComputedStyle(elem);\n' +
+    '        return { value: style?.display ?? "" };\n' +
+    '      } catch {\n' +
+    '        if (typeof elem.isConnected === "boolean" && !elem.isConnected) {\n' +
+    '          throw new Error("stale element reference: element is not attached to the page document");\n' +
+    '        }\n' +
+    '        return { value: "" };\n' +
+    '      }\n' +
+    '    }).apply(null, arguments)\n' +
+    '        ',
+  args: [
+    {
+      'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.15',
+      ELEMENT: 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.15'
+    }
+  ]
+}
+2026-09-13T09:21:17.155Z INFO webdriver: RESULT true
+2026-09-13T09:21:17.167Z INFO webdriver: RESULT { value: 'flex' }
+2026-09-13T09:21:17.168Z INFO webdriver: COMMAND elementClick("f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.15")
+2026-09-13T09:21:17.168Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/element/f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.15/click
+2026-09-13T09:21:17.247Z INFO webdriver: RESULT null
+2026-09-13T09:21:17.247Z INFO webdriver: COMMAND findElement("xpath", "//*[contains(@data-testid,'client-card-') and contains(.,"Upload_Security_Test")]")
+2026-09-13T09:21:17.248Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/element
+2026-09-13T09:21:17.248Z INFO webdriver: DATA {
+  using: 'xpath',
+  value: `//*[contains(@data-testid,'client-card-') and contains(.,"Upload_Security_Test")]`
+}
+2026-09-13T09:21:17.265Z INFO webdriver: RESULT {
+  'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.22'
+}
+2026-09-13T09:21:17.267Z INFO webdriver: COMMAND executeScript(<fn>, <object>)
+2026-09-13T09:21:17.267Z INFO webdriver: COMMAND executeScript(<fn>, <object>)
+2026-09-13T09:21:17.267Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/execute/sync
+2026-09-13T09:21:17.268Z INFO webdriver: DATA {
+  script: 'checkVisibility(...) [614 bytes]',
+  args: [
+    {
+      'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.22',
+      ELEMENT: 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.22'
+    },
+    {
+      withinViewport: false,
+      contentVisibilityAuto: true,
+      opacityProperty: true,
+      visibilityProperty: true
+    }
+  ]
+}
+2026-09-13T09:21:17.268Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/execute/sync
+2026-09-13T09:21:17.268Z INFO webdriver: DATA {
+  script: '\n' +
+    '            function webdriverioPolyfill() {\n' +
+    '  var __defProp = Object.defineProperty;\n' +
+    '  var __name = function(target, _value) {\n' +
+    '    return __defProp(target, "name", { value: _value, configurable: true });\n' +
+    '  };\n' +
+    '  var __globalThis = typeof globalThis === "object" && globalThis || typeof window === "object" && window;\n' +
+    '  __globalThis.__name = __name;\n' +
+    '}\n' +
+    '            webdriverioPolyfill();\n' +
+    '            return (function(elem) {\n' +
+    '      try {\n' +
+    '        const style = window.getComputedStyle(elem);\n' +
+    '        return { value: style?.display ?? "" };\n' +
+    '      } catch {\n' +
+    '        if (typeof elem.isConnected === "boolean" && !elem.isConnected) {\n' +
+    '          throw new Error("stale element reference: element is not attached to the page document");\n' +
+    '        }\n' +
+    '        return { value: "" };\n' +
+    '      }\n' +
+    '    }).apply(null, arguments)\n' +
+    '        ',
+  args: [
+    {
+      'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.22',
+      ELEMENT: 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.22'
+    }
+  ]
+}
+2026-09-13T09:21:17.284Z INFO webdriver: RESULT { value: 'block' }
+2026-09-13T09:21:17.351Z INFO webdriver: RESULT true
+2026-09-13T09:21:17.351Z INFO webdriver: COMMAND findElementFromElement("f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.22", "xpath", ".//button[contains(., "Review") and not(.//button)]")
+2026-09-13T09:21:17.352Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/element/f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.22/element
+2026-09-13T09:21:17.352Z INFO webdriver: DATA {
+  using: 'xpath',
+  value: './/button[contains(., "Review") and not(.//button)]'
+}
+2026-09-13T09:21:17.367Z INFO webdriver: RESULT {
+  'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.23'
+}
+2026-09-13T09:21:17.370Z INFO webdriver: COMMAND elementClick("f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.23")
+2026-09-13T09:21:17.370Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/element/f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.23/click
+2026-09-13T09:21:19.604Z INFO webdriver: RESULT null
+2026-09-13T09:21:19.605Z INFO webdriver: COMMAND findElements("css selector", "[data-testid="exception-card-item"]")
+2026-09-13T09:21:19.605Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/elements
+2026-09-13T09:21:19.605Z INFO webdriver: DATA { using: 'css selector', value: '[data-testid="exception-card-item"]' }
+2026-09-13T09:21:19.626Z INFO webdriver: RESULT []
+[FAIL] 25 findings persist 0
+2026-09-13T09:21:19.629Z INFO webdriver: COMMAND findElement("css selector", "[data-testid="exception-category-possible_duplicate"]")
+2026-09-13T09:21:19.629Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/element
+2026-09-13T09:21:19.629Z INFO webdriver: DATA {
+  using: 'css selector',
+  value: '[data-testid="exception-category-possible_duplicate"]'
+}
+2026-09-13T09:21:19.732Z INFO webdriver: RESULT {
+  'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.30'
+}
+2026-09-13T09:21:19.735Z INFO webdriver: COMMAND executeScript(<fn>, <object>)
+2026-09-13T09:21:19.736Z INFO webdriver: COMMAND executeScript(<fn>, <object>)
+2026-09-13T09:21:19.737Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/execute/sync
+2026-09-13T09:21:19.738Z INFO webdriver: DATA {
+  script: 'checkVisibility(...) [614 bytes]',
+  args: [
+    {
+      'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.30',
+      ELEMENT: 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.30'
+    },
+    {
+      withinViewport: false,
+      contentVisibilityAuto: true,
+      opacityProperty: true,
+      visibilityProperty: true
+    }
+  ]
+}
+2026-09-13T09:21:19.739Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/execute/sync
+2026-09-13T09:21:19.739Z INFO webdriver: DATA {
+  script: '\n' +
+    '            function webdriverioPolyfill() {\n' +
+    '  var __defProp = Object.defineProperty;\n' +
+    '  var __name = function(target, _value) {\n' +
+    '    return __defProp(target, "name", { value: _value, configurable: true });\n' +
+    '  };\n' +
+    '  var __globalThis = typeof globalThis === "object" && globalThis || typeof window === "object" && window;\n' +
+    '  __globalThis.__name = __name;\n' +
+    '}\n' +
+    '            webdriverioPolyfill();\n' +
+    '            return (function(elem) {\n' +
+    '      try {\n' +
+    '        const style = window.getComputedStyle(elem);\n' +
+    '        return { value: style?.display ?? "" };\n' +
+    '      } catch {\n' +
+    '        if (typeof elem.isConnected === "boolean" && !elem.isConnected) {\n' +
+    '          throw new Error("stale element reference: element is not attached to the page document");\n' +
+    '        }\n' +
+    '        return { value: "" };\n' +
+    '      }\n' +
+    '    }).apply(null, arguments)\n' +
+    '        ',
+  args: [
+    {
+      'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.30',
+      ELEMENT: 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.30'
+    }
+  ]
+}
+2026-09-13T09:21:19.804Z INFO webdriver: RESULT true
+2026-09-13T09:21:19.813Z INFO webdriver: RESULT { value: 'block' }
+2026-09-13T09:21:19.813Z INFO webdriver: COMMAND elementClick("f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.30")
+2026-09-13T09:21:19.813Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/element/f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.30/click
+2026-09-13T09:21:19.985Z INFO webdriver: RESULT null
+2026-09-13T09:21:19.986Z INFO webdriver: COMMAND findElements("css selector", "[data-testid="exception-card-item"]")
+2026-09-13T09:21:19.986Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/elements
+2026-09-13T09:21:19.986Z INFO webdriver: DATA { using: 'css selector', value: '[data-testid="exception-card-item"]' }
+2026-09-13T09:21:20.000Z INFO webdriver: RESULT [
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.36'
+  },
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.37'
+  },
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.38'
+  },
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.39'
+  },
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.40'
+  },
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.41'
+  },
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.42'
+  },
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.43'
+  },
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.44'
+  },
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.45'
+  },
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.46'
+  },
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.47'
+  },
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.48'
+  },
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.49'
+  },
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.50'
+  }
+]
+2026-09-13T09:21:20.016Z INFO webdriver: COMMAND getElementText("f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.36")
+2026-09-13T09:21:20.016Z INFO webdriver: [GET] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/element/f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.36/text
+2026-09-13T09:21:20.044Z INFO webdriver: RESULT Possible Duplicates
+99% · high
+"lease_schedule.csv" looks similar to "lease_schedule.xlsx"
+Keep
+2 file(s)
+[PASS] Keep decision persists 
+2026-09-13T09:21:20.045Z INFO webdriver: COMMAND findElement("css selector", "[data-testid="exception-category-wrong_period"]")
+2026-09-13T09:21:20.045Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/element
+2026-09-13T09:21:20.045Z INFO webdriver: DATA {
+  using: 'css selector',
+  value: '[data-testid="exception-category-wrong_period"]'
+}
+2026-09-13T09:21:20.060Z INFO webdriver: RESULT {
+  'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.66'
+}
+2026-09-13T09:21:20.062Z INFO webdriver: COMMAND executeScript(<fn>, <object>)
+2026-09-13T09:21:20.063Z INFO webdriver: COMMAND executeScript(<fn>, <object>)
+2026-09-13T09:21:20.063Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/execute/sync
+2026-09-13T09:21:20.063Z INFO webdriver: DATA {
+  script: 'checkVisibility(...) [614 bytes]',
+  args: [
+    {
+      'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.66',
+      ELEMENT: 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.66'
+    },
+    {
+      withinViewport: false,
+      contentVisibilityAuto: true,
+      opacityProperty: true,
+      visibilityProperty: true
+    }
+  ]
+}
+2026-09-13T09:21:20.063Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/execute/sync
+2026-09-13T09:21:20.064Z INFO webdriver: DATA {
+  script: '\n' +
+    '            function webdriverioPolyfill() {\n' +
+    '  var __defProp = Object.defineProperty;\n' +
+    '  var __name = function(target, _value) {\n' +
+    '    return __defProp(target, "name", { value: _value, configurable: true });\n' +
+    '  };\n' +
+    '  var __globalThis = typeof globalThis === "object" && globalThis || typeof window === "object" && window;\n' +
+    '  __globalThis.__name = __name;\n' +
+    '}\n' +
+    '            webdriverioPolyfill();\n' +
+    '            return (function(elem) {\n' +
+    '      try {\n' +
+    '        const style = window.getComputedStyle(elem);\n' +
+    '        return { value: style?.display ?? "" };\n' +
+    '      } catch {\n' +
+    '        if (typeof elem.isConnected === "boolean" && !elem.isConnected) {\n' +
+    '          throw new Error("stale element reference: element is not attached to the page document");\n' +
+    '        }\n' +
+    '        return { value: "" };\n' +
+    '      }\n' +
+    '    }).apply(null, arguments)\n' +
+    '        ',
+  args: [
+    {
+      'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.66',
+      ELEMENT: 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.66'
+    }
+  ]
+}
+2026-09-13T09:21:20.072Z INFO webdriver: RESULT true
+2026-09-13T09:21:20.076Z INFO webdriver: RESULT { value: 'block' }
+2026-09-13T09:21:20.076Z INFO webdriver: COMMAND elementClick("f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.66")
+2026-09-13T09:21:20.076Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/element/f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.66/click
+2026-09-13T09:21:20.240Z INFO webdriver: RESULT null
+2026-09-13T09:21:20.240Z INFO webdriver: COMMAND findElements("css selector", "[data-testid="exception-card-item"]")
+2026-09-13T09:21:20.240Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/elements
+2026-09-13T09:21:20.240Z INFO webdriver: DATA { using: 'css selector', value: '[data-testid="exception-card-item"]' }
+2026-09-13T09:21:20.248Z INFO webdriver: RESULT [
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.67'
+  },
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.68'
+  },
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.69'
+  },
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.70'
+  },
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.71'
+  },
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.72'
+  },
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.73'
+  },
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.74'
+  },
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.75'
+  },
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.76'
+  }
+]
+2026-09-13T09:21:20.374Z INFO webdriver: COMMAND getElementText("f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.67")
+2026-09-13T09:21:20.374Z INFO webdriver: [GET] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/element/f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.67/text
+2026-09-13T09:21:20.386Z INFO webdriver: RESULT Wrong Period
+75% · medium
+"gl_extract.csv" appears to be from 2024, not 2026
+Review Later
+1 file(s)
+2026-09-13T09:21:20.386Z INFO webdriver: COMMAND elementClick("f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.67")
+2026-09-13T09:21:20.386Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/element/f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.67/click
+2026-09-13T09:21:20.443Z INFO webdriver: RESULT null
+2026-09-13T09:21:20.444Z INFO webdriver: COMMAND findElement("css selector", "[data-testid="finding-note-input"]")
+2026-09-13T09:21:20.445Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/element
+2026-09-13T09:21:20.445Z INFO webdriver: DATA { using: 'css selector', value: '[data-testid="finding-note-input"]' }
+2026-09-13T09:21:20.458Z INFO webdriver: RESULT {
+  'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.77'
+}
+2026-09-13T09:21:20.460Z INFO webdriver: COMMAND getElementProperty("f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.77", "value")
+2026-09-13T09:21:20.460Z INFO webdriver: [GET] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/element/f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.77/property/value
+2026-09-13T09:21:20.466Z INFO webdriver: RESULT Final independent UI verification < > & =SUM(A1:A2) @test
+[PASS] Note persists 
+[PASS] Review Later decision persists 
+2026-09-13T09:21:20.467Z INFO webdriver: COMMAND findElement("css selector", "[data-testid="review-export-button"]")
+2026-09-13T09:21:20.467Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/element
+2026-09-13T09:21:20.467Z INFO webdriver: DATA {
+  using: 'css selector',
+  value: '[data-testid="review-export-button"]'
+}
+2026-09-13T09:21:20.479Z INFO webdriver: RESULT {
+  'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.79'
+}
+2026-09-13T09:21:20.480Z INFO webdriver: COMMAND executeScript(<fn>, <object>)
+2026-09-13T09:21:20.480Z INFO webdriver: COMMAND executeScript(<fn>, <object>)
+2026-09-13T09:21:20.480Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/execute/sync
+2026-09-13T09:21:20.480Z INFO webdriver: DATA {
+  script: 'checkVisibility(...) [614 bytes]',
+  args: [
+    {
+      'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.79',
+      ELEMENT: 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.79'
+    },
+    {
+      withinViewport: false,
+      contentVisibilityAuto: true,
+      opacityProperty: true,
+      visibilityProperty: true
+    }
+  ]
+}
+2026-09-13T09:21:20.481Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/execute/sync
+2026-09-13T09:21:20.481Z INFO webdriver: DATA {
+  script: '\n' +
+    '            function webdriverioPolyfill() {\n' +
+    '  var __defProp = Object.defineProperty;\n' +
+    '  var __name = function(target, _value) {\n' +
+    '    return __defProp(target, "name", { value: _value, configurable: true });\n' +
+    '  };\n' +
+    '  var __globalThis = typeof globalThis === "object" && globalThis || typeof window === "object" && window;\n' +
+    '  __globalThis.__name = __name;\n' +
+    '}\n' +
+    '            webdriverioPolyfill();\n' +
+    '            return (function(elem) {\n' +
+    '      try {\n' +
+    '        const style = window.getComputedStyle(elem);\n' +
+    '        return { value: style?.display ?? "" };\n' +
+    '      } catch {\n' +
+    '        if (typeof elem.isConnected === "boolean" && !elem.isConnected) {\n' +
+    '          throw new Error("stale element reference: element is not attached to the page document");\n' +
+    '        }\n' +
+    '        return { value: "" };\n' +
+    '      }\n' +
+    '    }).apply(null, arguments)\n' +
+    '        ',
+  args: [
+    {
+      'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.79',
+      ELEMENT: 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.79'
+    }
+  ]
+}
+2026-09-13T09:21:20.493Z INFO webdriver: RESULT true
+2026-09-13T09:21:20.497Z INFO webdriver: RESULT { value: 'flex' }
+2026-09-13T09:21:20.497Z INFO webdriver: COMMAND elementClick("f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.79")
+2026-09-13T09:21:20.498Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/element/f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.79/click
+2026-09-13T09:21:21.674Z INFO webdriver: RESULT null
+2026-09-13T09:21:21.682Z INFO webdriver: COMMAND findElement("css selector", "[data-testid="export-csv-button"]")
+2026-09-13T09:21:21.682Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/element
+2026-09-13T09:21:21.682Z INFO webdriver: DATA { using: 'css selector', value: '[data-testid="export-csv-button"]' }
+2026-09-13T09:21:21.699Z INFO webdriver: RESULT {
+  'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.84'
+}
+2026-09-13T09:21:21.701Z INFO webdriver: COMMAND executeScript(<fn>, <object>)
+2026-09-13T09:21:21.701Z INFO webdriver: COMMAND executeScript(<fn>, <object>)
+2026-09-13T09:21:21.701Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/execute/sync
+2026-09-13T09:21:21.701Z INFO webdriver: DATA {
+  script: 'checkVisibility(...) [614 bytes]',
+  args: [
+    {
+      'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.84',
+      ELEMENT: 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.84'
+    },
+    {
+      withinViewport: false,
+      contentVisibilityAuto: true,
+      opacityProperty: true,
+      visibilityProperty: true
+    }
+  ]
+}
+2026-09-13T09:21:21.702Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/execute/sync
+2026-09-13T09:21:21.703Z INFO webdriver: DATA {
+  script: '\n' +
+    '            function webdriverioPolyfill() {\n' +
+    '  var __defProp = Object.defineProperty;\n' +
+    '  var __name = function(target, _value) {\n' +
+    '    return __defProp(target, "name", { value: _value, configurable: true });\n' +
+    '  };\n' +
+    '  var __globalThis = typeof globalThis === "object" && globalThis || typeof window === "object" && window;\n' +
+    '  __globalThis.__name = __name;\n' +
+    '}\n' +
+    '            webdriverioPolyfill();\n' +
+    '            return (function(elem) {\n' +
+    '      try {\n' +
+    '        const style = window.getComputedStyle(elem);\n' +
+    '        return { value: style?.display ?? "" };\n' +
+    '      } catch {\n' +
+    '        if (typeof elem.isConnected === "boolean" && !elem.isConnected) {\n' +
+    '          throw new Error("stale element reference: element is not attached to the page document");\n' +
+    '        }\n' +
+    '        return { value: "" };\n' +
+    '      }\n' +
+    '    }).apply(null, arguments)\n' +
+    '        ',
+  args: [
+    {
+      'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.84',
+      ELEMENT: 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.84'
+    }
+  ]
+}
+2026-09-13T09:21:21.717Z INFO webdriver: RESULT true
+2026-09-13T09:21:21.727Z INFO webdriver: RESULT { value: 'flex' }
+2026-09-13T09:21:21.727Z INFO webdriver: COMMAND elementClick("f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.84")
+2026-09-13T09:21:21.727Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/element/f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.84/click
+2026-09-13T09:21:21.781Z INFO webdriver: RESULT null
+[PASS] CSV export after restart C:\Users\acer\Downloads\review_report_Upload_Security_Test.csv
+2026-09-13T09:21:22.294Z INFO webdriver: COMMAND findElement("css selector", "[data-testid="export-xlsx-button"]")
+2026-09-13T09:21:22.294Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/element
+2026-09-13T09:21:22.294Z INFO webdriver: DATA { using: 'css selector', value: '[data-testid="export-xlsx-button"]' }
+2026-09-13T09:21:22.306Z INFO webdriver: RESULT {
+  'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.89'
+}
+2026-09-13T09:21:22.307Z INFO webdriver: COMMAND executeScript(<fn>, <object>)
+2026-09-13T09:21:22.308Z INFO webdriver: COMMAND executeScript(<fn>, <object>)
+2026-09-13T09:21:22.308Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/execute/sync
+2026-09-13T09:21:22.308Z INFO webdriver: DATA {
+  script: 'checkVisibility(...) [614 bytes]',
+  args: [
+    {
+      'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.89',
+      ELEMENT: 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.89'
+    },
+    {
+      withinViewport: false,
+      contentVisibilityAuto: true,
+      opacityProperty: true,
+      visibilityProperty: true
+    }
+  ]
+}
+2026-09-13T09:21:22.308Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/execute/sync
+2026-09-13T09:21:22.308Z INFO webdriver: DATA {
+  script: '\n' +
+    '            function webdriverioPolyfill() {\n' +
+    '  var __defProp = Object.defineProperty;\n' +
+    '  var __name = function(target, _value) {\n' +
+    '    return __defProp(target, "name", { value: _value, configurable: true });\n' +
+    '  };\n' +
+    '  var __globalThis = typeof globalThis === "object" && globalThis || typeof window === "object" && window;\n' +
+    '  __globalThis.__name = __name;\n' +
+    '}\n' +
+    '            webdriverioPolyfill();\n' +
+    '            return (function(elem) {\n' +
+    '      try {\n' +
+    '        const style = window.getComputedStyle(elem);\n' +
+    '        return { value: style?.display ?? "" };\n' +
+    '      } catch {\n' +
+    '        if (typeof elem.isConnected === "boolean" && !elem.isConnected) {\n' +
+    '          throw new Error("stale element reference: element is not attached to the page document");\n' +
+    '        }\n' +
+    '        return { value: "" };\n' +
+    '      }\n' +
+    '    }).apply(null, arguments)\n' +
+    '        ',
+  args: [
+    {
+      'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.89',
+      ELEMENT: 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.89'
+    }
+  ]
+}
+2026-09-13T09:21:22.315Z INFO webdriver: RESULT true
+2026-09-13T09:21:22.318Z INFO webdriver: RESULT { value: 'flex' }
+2026-09-13T09:21:22.318Z INFO webdriver: COMMAND elementClick("f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.89")
+2026-09-13T09:21:22.318Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/element/f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.89/click
+2026-09-13T09:21:22.361Z INFO webdriver: RESULT null
+[PASS] XLSX export after restart C:\Users\acer\Downloads\review_report_Upload_Security_Test.xlsx
+2026-09-13T09:21:22.872Z INFO webdriver: COMMAND findElement("css selector", "[data-testid="export-pdf-button"]")
+2026-09-13T09:21:22.873Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/element
+2026-09-13T09:21:22.873Z INFO webdriver: DATA { using: 'css selector', value: '[data-testid="export-pdf-button"]' }
+2026-09-13T09:21:22.881Z INFO webdriver: RESULT {
+  'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.90'
+}
+2026-09-13T09:21:22.883Z INFO webdriver: COMMAND executeScript(<fn>, <object>)
+2026-09-13T09:21:22.883Z INFO webdriver: COMMAND executeScript(<fn>, <object>)
+2026-09-13T09:21:22.883Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/execute/sync
+2026-09-13T09:21:22.883Z INFO webdriver: DATA {
+  script: 'checkVisibility(...) [614 bytes]',
+  args: [
+    {
+      'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.90',
+      ELEMENT: 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.90'
+    },
+    {
+      withinViewport: false,
+      contentVisibilityAuto: true,
+      opacityProperty: true,
+      visibilityProperty: true
+    }
+  ]
+}
+2026-09-13T09:21:22.883Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/execute/sync
+2026-09-13T09:21:22.883Z INFO webdriver: DATA {
+  script: '\n' +
+    '            function webdriverioPolyfill() {\n' +
+    '  var __defProp = Object.defineProperty;\n' +
+    '  var __name = function(target, _value) {\n' +
+    '    return __defProp(target, "name", { value: _value, configurable: true });\n' +
+    '  };\n' +
+    '  var __globalThis = typeof globalThis === "object" && globalThis || typeof window === "object" && window;\n' +
+    '  __globalThis.__name = __name;\n' +
+    '}\n' +
+    '            webdriverioPolyfill();\n' +
+    '            return (function(elem) {\n' +
+    '      try {\n' +
+    '        const style = window.getComputedStyle(elem);\n' +
+    '        return { value: style?.display ?? "" };\n' +
+    '      } catch {\n' +
+    '        if (typeof elem.isConnected === "boolean" && !elem.isConnected) {\n' +
+    '          throw new Error("stale element reference: element is not attached to the page document");\n' +
+    '        }\n' +
+    '        return { value: "" };\n' +
+    '      }\n' +
+    '    }).apply(null, arguments)\n' +
+    '        ',
+  args: [
+    {
+      'element-6066-11e4-a52e-4f735466cecf': 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.90',
+      ELEMENT: 'f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.90'
+    }
+  ]
+}
+2026-09-13T09:21:22.892Z INFO webdriver: RESULT true
+2026-09-13T09:21:22.896Z INFO webdriver: RESULT { value: 'flex' }
+2026-09-13T09:21:22.896Z INFO webdriver: COMMAND elementClick("f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.90")
+2026-09-13T09:21:22.896Z INFO webdriver: [POST] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563/element/f.C7C0DEA2D13399DD8C3C2605DDD6AD0E.d.23AB131A72EC99E2A71134BB087AFAF1.e.90/click
+2026-09-13T09:21:23.044Z INFO webdriver: RESULT null
+[PASS] PDF export after restart C:\Users\acer\Downloads\review_report_Upload_Security_Test.pdf
+VALID CSV=5207 XLSX=6433 PDF=5438
+[PASS] Restart exports readable and safe 
+2026-09-13T09:21:27.819Z INFO webdriver: COMMAND deleteSession()
+2026-09-13T09:21:27.819Z INFO webdriver: [DELETE] http://127.0.0.1:4444/session/ceb76f1fccf780c94c8fdd953cc87563
+2026-09-13T09:21:27.860Z INFO webdriver: RESULT null

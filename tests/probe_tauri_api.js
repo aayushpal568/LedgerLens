@@ -1,0 +1,5 @@
+const {remote}=require('webdriverio'); const {spawn,execFileSync}=require('child_process'); const path=require('path'); const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+(async()=>{try{execFileSync('powershell.exe',['-NoProfile','-Command','Get-Process ledgerlens,ledgerlens-backend,tauri-driver,msedgedriver -ErrorAction SilentlyContinue|Stop-Process -Force']);}catch{}
+const d=spawn(path.join(process.env.USERPROFILE,'.cargo','bin','tauri-driver.exe'),['--port','4444']); await sleep(1500); const b=await remote({hostname:'127.0.0.1',port:4444,path:'/',capabilities:{'tauri:options':{application:path.join(process.env.LOCALAPPDATA,'LedgerLens','ledgerlens.exe')}}}); await sleep(25000);
+console.log(await b.execute(()=>({tauri:typeof window.__TAURI__,keys:window.__TAURI__?Object.keys(window.__TAURI__):[],dialog:typeof window.__TAURI__?.dialog,open:typeof window.__TAURI__?.dialog?.open,pluginDialog:typeof window.__TAURI__?.plugin?.dialog})));
+await b.deleteSession(); d.kill(); try{execFileSync('powershell.exe',['-NoProfile','-Command','Get-Process ledgerlens,ledgerlens-backend,tauri-driver,msedgedriver -ErrorAction SilentlyContinue|Stop-Process -Force']);}catch{}})();

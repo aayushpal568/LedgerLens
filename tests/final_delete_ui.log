@@ -1,0 +1,468 @@
+2026-09-13T09:10:24.788Z INFO webdriver: Initiate new session using the WebDriver protocol
+2026-09-13T09:10:24.790Z INFO @wdio/utils: Connecting to existing driver at http://127.0.0.1:4444/
+2026-09-13T09:10:24.804Z INFO webdriver: [POST] http://127.0.0.1:4444/session
+2026-09-13T09:10:27.287Z INFO webdriver: COMMAND getWindowHandle()
+2026-09-13T09:10:27.287Z INFO webdriver: [GET] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/window
+2026-09-13T09:10:27.292Z INFO webdriver: RESULT C65417A9F09774C05F92CF4FE16843AF
+2026-09-13T09:10:41.473Z INFO webdriver: COMMAND findElement("xpath", ".//button[contains(., "Continue to App") and not(.//button)]")
+2026-09-13T09:10:41.474Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element
+2026-09-13T09:10:41.474Z INFO webdriver: DATA {
+  using: 'xpath',
+  value: './/button[contains(., "Continue to App") and not(.//button)]'
+}
+2026-09-13T09:10:41.488Z INFO webdriver: RESULT {
+  'element-6066-11e4-a52e-4f735466cecf': 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.14'
+}
+2026-09-13T09:10:41.494Z INFO webdriver: COMMAND findElements("xpath", ".//button[contains(., "Continue to App") and not(.//button)]")
+2026-09-13T09:10:41.494Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/elements
+2026-09-13T09:10:41.494Z INFO webdriver: DATA {
+  using: 'xpath',
+  value: './/button[contains(., "Continue to App") and not(.//button)]'
+}
+2026-09-13T09:10:41.506Z INFO webdriver: RESULT [
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.14'
+  }
+]
+2026-09-13T09:10:41.510Z INFO webdriver: COMMAND elementClick("f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.14")
+2026-09-13T09:10:41.510Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element/f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.14/click
+2026-09-13T09:10:41.580Z INFO webdriver: RESULT null
+2026-09-13T09:10:41.581Z INFO webdriver: COMMAND findElement("css selector", "[data-testid="nav-clients"]")
+2026-09-13T09:10:41.581Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element
+2026-09-13T09:10:41.581Z INFO webdriver: DATA { using: 'css selector', value: '[data-testid="nav-clients"]' }
+2026-09-13T09:10:41.594Z INFO webdriver: RESULT {
+  'element-6066-11e4-a52e-4f735466cecf': 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.17'
+}
+2026-09-13T09:10:41.603Z INFO webdriver: COMMAND findElements("css selector", "[data-testid="nav-clients"]")
+2026-09-13T09:10:41.603Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/elements
+2026-09-13T09:10:41.603Z INFO webdriver: DATA { using: 'css selector', value: '[data-testid="nav-clients"]' }
+2026-09-13T09:10:41.618Z INFO webdriver: RESULT [
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.17'
+  }
+]
+2026-09-13T09:10:41.621Z INFO webdriver: COMMAND getElementTagName("f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.17")
+2026-09-13T09:10:41.621Z INFO webdriver: [GET] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element/f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.17/name
+2026-09-13T09:10:41.627Z INFO webdriver: RESULT button
+2026-09-13T09:10:41.627Z INFO webdriver: COMMAND elementClick("f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.17")
+2026-09-13T09:10:41.627Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element/f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.17/click
+2026-09-13T09:10:41.686Z INFO webdriver: RESULT null
+2026-09-13T09:10:41.686Z INFO webdriver: COMMAND findElement("css selector", "[data-testid="add-client-button"]")
+2026-09-13T09:10:41.687Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element
+2026-09-13T09:10:41.687Z INFO webdriver: DATA { using: 'css selector', value: '[data-testid="add-client-button"]' }
+2026-09-13T09:10:41.702Z INFO webdriver: RESULT {
+  'element-6066-11e4-a52e-4f735466cecf': 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.18'
+}
+2026-09-13T09:10:41.705Z INFO webdriver: COMMAND findElements("css selector", "[data-testid="add-client-button"]")
+2026-09-13T09:10:41.706Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/elements
+2026-09-13T09:10:41.706Z INFO webdriver: DATA { using: 'css selector', value: '[data-testid="add-client-button"]' }
+2026-09-13T09:10:41.722Z INFO webdriver: RESULT [
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.18'
+  }
+]
+2026-09-13T09:10:41.725Z INFO webdriver: COMMAND getElementTagName("f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.18")
+2026-09-13T09:10:41.725Z INFO webdriver: [GET] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element/f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.18/name
+2026-09-13T09:10:41.732Z INFO webdriver: RESULT button
+2026-09-13T09:10:41.733Z INFO webdriver: COMMAND elementClick("f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.18")
+2026-09-13T09:10:41.733Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element/f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.18/click
+2026-09-13T09:10:41.784Z INFO webdriver: RESULT null
+2026-09-13T09:10:41.784Z INFO webdriver: COMMAND findElement("css selector", "[data-testid="client-name-input"]")
+2026-09-13T09:10:41.784Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element
+2026-09-13T09:10:41.784Z INFO webdriver: DATA { using: 'css selector', value: '[data-testid="client-name-input"]' }
+2026-09-13T09:10:41.792Z INFO webdriver: RESULT {
+  'element-6066-11e4-a52e-4f735466cecf': 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.20'
+}
+2026-09-13T09:10:41.794Z INFO webdriver: COMMAND elementClear("f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.20")
+2026-09-13T09:10:41.794Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element/f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.20/clear
+2026-09-13T09:10:42.084Z INFO webdriver: RESULT null
+2026-09-13T09:10:42.085Z INFO webdriver: COMMAND elementSendKeys("f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.20", "Delete_UI_QA_1789290641784")
+2026-09-13T09:10:42.085Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element/f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.20/value
+2026-09-13T09:10:42.085Z INFO webdriver: DATA { text: 'Delete_UI_QA_1789290641784' }
+2026-09-13T09:10:42.204Z INFO webdriver: RESULT null
+2026-09-13T09:10:42.204Z INFO webdriver: COMMAND findElement("css selector", "[data-testid="client-create-submit"]")
+2026-09-13T09:10:42.204Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element
+2026-09-13T09:10:42.204Z INFO webdriver: DATA {
+  using: 'css selector',
+  value: '[data-testid="client-create-submit"]'
+}
+2026-09-13T09:10:42.220Z INFO webdriver: RESULT {
+  'element-6066-11e4-a52e-4f735466cecf': 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.26'
+}
+2026-09-13T09:10:42.222Z INFO webdriver: COMMAND findElements("css selector", "[data-testid="client-create-submit"]")
+2026-09-13T09:10:42.222Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/elements
+2026-09-13T09:10:42.222Z INFO webdriver: DATA {
+  using: 'css selector',
+  value: '[data-testid="client-create-submit"]'
+}
+2026-09-13T09:10:42.231Z INFO webdriver: RESULT [
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.26'
+  }
+]
+2026-09-13T09:10:42.233Z INFO webdriver: COMMAND getElementTagName("f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.26")
+2026-09-13T09:10:42.233Z INFO webdriver: [GET] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element/f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.26/name
+2026-09-13T09:10:42.238Z INFO webdriver: RESULT button
+2026-09-13T09:10:42.239Z INFO webdriver: COMMAND elementClick("f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.26")
+2026-09-13T09:10:42.239Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element/f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.26/click
+2026-09-13T09:10:42.410Z INFO webdriver: RESULT null
+2026-09-13T09:10:43.112Z INFO webdriver: COMMAND findElement("xpath", "//*[contains(@data-testid,'client-card-') and contains(.,"Delete_UI_QA_1789290641784")]")
+2026-09-13T09:10:43.112Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element
+2026-09-13T09:10:43.112Z INFO webdriver: DATA {
+  using: 'xpath',
+  value: `//*[contains(@data-testid,'client-card-') and contains(.,"Delete_UI_QA_1789290641784")]`
+}
+2026-09-13T09:10:43.123Z INFO webdriver: RESULT {
+  'element-6066-11e4-a52e-4f735466cecf': 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.69'
+}
+2026-09-13T09:10:43.125Z INFO webdriver: COMMAND executeScript(<fn>, <object>)
+2026-09-13T09:10:43.910Z INFO webdriver: COMMAND executeScript(<fn>, <object>)
+2026-09-13T09:10:43.910Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/execute/sync
+2026-09-13T09:10:43.911Z INFO webdriver: DATA {
+  script: 'checkVisibility(...) [614 bytes]',
+  args: [
+    {
+      'element-6066-11e4-a52e-4f735466cecf': 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.69',
+      ELEMENT: 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.69'
+    },
+    {
+      withinViewport: false,
+      contentVisibilityAuto: true,
+      opacityProperty: true,
+      visibilityProperty: true
+    }
+  ]
+}
+2026-09-13T09:10:43.911Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/execute/sync
+2026-09-13T09:10:43.912Z INFO webdriver: DATA {
+  script: '\n' +
+    '            function webdriverioPolyfill() {\n' +
+    '  var __defProp = Object.defineProperty;\n' +
+    '  var __name = function(target, _value) {\n' +
+    '    return __defProp(target, "name", { value: _value, configurable: true });\n' +
+    '  };\n' +
+    '  var __globalThis = typeof globalThis === "object" && globalThis || typeof window === "object" && window;\n' +
+    '  __globalThis.__name = __name;\n' +
+    '}\n' +
+    '            webdriverioPolyfill();\n' +
+    '            return (function(elem) {\n' +
+    '      try {\n' +
+    '        const style = window.getComputedStyle(elem);\n' +
+    '        return { value: style?.display ?? "" };\n' +
+    '      } catch {\n' +
+    '        if (typeof elem.isConnected === "boolean" && !elem.isConnected) {\n' +
+    '          throw new Error("stale element reference: element is not attached to the page document");\n' +
+    '        }\n' +
+    '        return { value: "" };\n' +
+    '      }\n' +
+    '    }).apply(null, arguments)\n' +
+    '        ',
+  args: [
+    {
+      'element-6066-11e4-a52e-4f735466cecf': 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.69',
+      ELEMENT: 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.69'
+    }
+  ]
+}
+2026-09-13T09:10:43.942Z INFO webdriver: RESULT true
+2026-09-13T09:10:43.945Z INFO webdriver: RESULT { value: 'block' }
+2026-09-13T09:10:43.946Z INFO webdriver: COMMAND getElementAttribute("f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.69", "data-testid")
+2026-09-13T09:10:43.946Z INFO webdriver: [GET] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element/f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.69/attribute/data-testid
+2026-09-13T09:10:43.951Z INFO webdriver: RESULT client-card-eca483e6-e62d-4745-8614-4997727bab86
+2026-09-13T09:10:43.952Z INFO webdriver: COMMAND performActions(<object>)
+2026-09-13T09:10:43.954Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/actions
+2026-09-13T09:10:43.954Z INFO webdriver: DATA {
+  actions: [
+    {
+      id: 'pointer1',
+      type: 'pointer',
+      parameters: [Object],
+      actions: [Array]
+    }
+  ]
+}
+2026-09-13T09:10:44.073Z INFO webdriver: RESULT null
+2026-09-13T09:10:44.073Z INFO webdriver: COMMAND releaseActions()
+2026-09-13T09:10:44.073Z INFO webdriver: [DELETE] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/actions
+2026-09-13T09:10:44.076Z INFO webdriver: RESULT null
+2026-09-13T09:10:44.381Z INFO webdriver: COMMAND findElement("css selector", "[data-testid="delete-client-eca483e6-e62d-4745-8614-4997727bab86"]")
+2026-09-13T09:10:44.381Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element
+2026-09-13T09:10:44.381Z INFO webdriver: DATA {
+  using: 'css selector',
+  value: '[data-testid="delete-client-eca483e6-e62d-4745-8614-4997727bab86"]'
+}
+2026-09-13T09:10:44.389Z INFO webdriver: RESULT {
+  'element-6066-11e4-a52e-4f735466cecf': 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.70'
+}
+2026-09-13T09:10:44.391Z INFO webdriver: COMMAND findElements("css selector", "[data-testid="delete-client-eca483e6-e62d-4745-8614-4997727bab86"]")
+2026-09-13T09:10:44.391Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/elements
+2026-09-13T09:10:44.391Z INFO webdriver: DATA {
+  using: 'css selector',
+  value: '[data-testid="delete-client-eca483e6-e62d-4745-8614-4997727bab86"]'
+}
+2026-09-13T09:10:44.400Z INFO webdriver: RESULT [
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.70'
+  }
+]
+2026-09-13T09:10:45.176Z INFO webdriver: COMMAND getElementTagName("f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.70")
+2026-09-13T09:10:45.176Z INFO webdriver: [GET] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element/f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.70/name
+2026-09-13T09:10:45.182Z INFO webdriver: RESULT button
+2026-09-13T09:10:45.182Z INFO webdriver: COMMAND elementClick("f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.70")
+2026-09-13T09:10:45.183Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element/f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.70/click
+2026-09-13T09:10:45.265Z INFO webdriver: RESULT null
+2026-09-13T09:10:45.266Z INFO webdriver: COMMAND findElement("css selector", "[data-testid="delete-step1-cancel"]")
+2026-09-13T09:10:45.266Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element
+2026-09-13T09:10:45.266Z INFO webdriver: DATA { using: 'css selector', value: '[data-testid="delete-step1-cancel"]' }
+2026-09-13T09:10:45.275Z INFO webdriver: RESULT {
+  'element-6066-11e4-a52e-4f735466cecf': 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.71'
+}
+2026-09-13T09:10:45.277Z INFO webdriver: COMMAND findElements("css selector", "[data-testid="delete-step1-cancel"]")
+2026-09-13T09:10:45.277Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/elements
+2026-09-13T09:10:45.277Z INFO webdriver: DATA { using: 'css selector', value: '[data-testid="delete-step1-cancel"]' }
+2026-09-13T09:10:45.293Z INFO webdriver: RESULT [
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.71'
+  }
+]
+2026-09-13T09:10:45.296Z INFO webdriver: COMMAND getElementTagName("f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.71")
+2026-09-13T09:10:45.297Z INFO webdriver: [GET] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element/f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.71/name
+2026-09-13T09:10:45.311Z INFO webdriver: RESULT button
+2026-09-13T09:10:45.312Z INFO webdriver: COMMAND elementClick("f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.71")
+2026-09-13T09:10:45.312Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element/f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.71/click
+2026-09-13T09:10:47.095Z INFO webdriver: RESULT null
+2026-09-13T09:10:47.095Z INFO webdriver: COMMAND findElements("xpath", "//*[contains(@data-testid,'client-card-') and contains(.,"Delete_UI_QA_1789290641784")]")
+2026-09-13T09:10:47.095Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/elements
+2026-09-13T09:10:47.095Z INFO webdriver: DATA {
+  using: 'xpath',
+  value: `//*[contains(@data-testid,'client-card-') and contains(.,"Delete_UI_QA_1789290641784")]`
+}
+2026-09-13T09:10:47.119Z INFO webdriver: RESULT [
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.69'
+  }
+]
+[PASS] Cancel preserves client Delete_UI_QA_1789290641784
+2026-09-13T09:10:47.121Z INFO webdriver: COMMAND performActions(<object>)
+2026-09-13T09:10:47.121Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/actions
+2026-09-13T09:10:47.121Z INFO webdriver: DATA {
+  actions: [
+    {
+      id: 'pointer2',
+      type: 'pointer',
+      parameters: [Object],
+      actions: [Array]
+    }
+  ]
+}
+2026-09-13T09:10:47.241Z INFO webdriver: RESULT null
+2026-09-13T09:10:47.241Z INFO webdriver: COMMAND releaseActions()
+2026-09-13T09:10:47.241Z INFO webdriver: [DELETE] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/actions
+2026-09-13T09:10:47.244Z INFO webdriver: RESULT null
+2026-09-13T09:10:47.548Z INFO webdriver: COMMAND findElement("css selector", "[data-testid="delete-client-eca483e6-e62d-4745-8614-4997727bab86"]")
+2026-09-13T09:10:47.548Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element
+2026-09-13T09:10:47.548Z INFO webdriver: DATA {
+  using: 'css selector',
+  value: '[data-testid="delete-client-eca483e6-e62d-4745-8614-4997727bab86"]'
+}
+2026-09-13T09:10:47.555Z INFO webdriver: RESULT {
+  'element-6066-11e4-a52e-4f735466cecf': 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.70'
+}
+2026-09-13T09:10:47.556Z INFO webdriver: COMMAND findElements("css selector", "[data-testid="delete-client-eca483e6-e62d-4745-8614-4997727bab86"]")
+2026-09-13T09:10:47.556Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/elements
+2026-09-13T09:10:47.556Z INFO webdriver: DATA {
+  using: 'css selector',
+  value: '[data-testid="delete-client-eca483e6-e62d-4745-8614-4997727bab86"]'
+}
+2026-09-13T09:10:47.563Z INFO webdriver: RESULT [
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.70'
+  }
+]
+2026-09-13T09:10:47.565Z INFO webdriver: COMMAND getElementTagName("f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.70")
+2026-09-13T09:10:47.565Z INFO webdriver: [GET] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element/f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.70/name
+2026-09-13T09:10:47.571Z INFO webdriver: RESULT button
+2026-09-13T09:10:47.571Z INFO webdriver: COMMAND elementClick("f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.70")
+2026-09-13T09:10:47.571Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element/f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.70/click
+2026-09-13T09:10:47.622Z INFO webdriver: RESULT null
+2026-09-13T09:10:47.622Z INFO webdriver: COMMAND findElement("css selector", "[data-testid="delete-step1-continue"]")
+2026-09-13T09:10:47.623Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element
+2026-09-13T09:10:47.623Z INFO webdriver: DATA {
+  using: 'css selector',
+  value: '[data-testid="delete-step1-continue"]'
+}
+2026-09-13T09:10:47.639Z INFO webdriver: RESULT {
+  'element-6066-11e4-a52e-4f735466cecf': 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.75'
+}
+2026-09-13T09:10:47.641Z INFO webdriver: COMMAND findElements("css selector", "[data-testid="delete-step1-continue"]")
+2026-09-13T09:10:47.641Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/elements
+2026-09-13T09:10:47.641Z INFO webdriver: DATA {
+  using: 'css selector',
+  value: '[data-testid="delete-step1-continue"]'
+}
+2026-09-13T09:10:47.659Z INFO webdriver: RESULT [
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.75'
+  }
+]
+2026-09-13T09:10:47.662Z INFO webdriver: COMMAND getElementTagName("f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.75")
+2026-09-13T09:10:47.663Z INFO webdriver: [GET] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element/f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.75/name
+2026-09-13T09:10:47.674Z INFO webdriver: RESULT button
+2026-09-13T09:10:47.675Z INFO webdriver: COMMAND elementClick("f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.75")
+2026-09-13T09:10:47.675Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element/f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.75/click
+2026-09-13T09:10:48.586Z INFO webdriver: RESULT null
+2026-09-13T09:10:48.586Z INFO webdriver: COMMAND findElement("css selector", "[data-testid="delete-step2-keep"]")
+2026-09-13T09:10:48.587Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element
+2026-09-13T09:10:48.587Z INFO webdriver: DATA { using: 'css selector', value: '[data-testid="delete-step2-keep"]' }
+2026-09-13T09:10:48.602Z INFO webdriver: RESULT {
+  'element-6066-11e4-a52e-4f735466cecf': 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.74'
+}
+2026-09-13T09:10:48.604Z INFO webdriver: COMMAND findElements("css selector", "[data-testid="delete-step2-keep"]")
+2026-09-13T09:10:48.604Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/elements
+2026-09-13T09:10:48.604Z INFO webdriver: DATA { using: 'css selector', value: '[data-testid="delete-step2-keep"]' }
+2026-09-13T09:10:48.614Z INFO webdriver: RESULT [
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.74'
+  }
+]
+2026-09-13T09:10:48.616Z INFO webdriver: COMMAND getElementTagName("f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.74")
+2026-09-13T09:10:48.616Z INFO webdriver: [GET] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element/f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.74/name
+2026-09-13T09:10:48.623Z INFO webdriver: RESULT button
+2026-09-13T09:10:48.623Z INFO webdriver: COMMAND elementClick("f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.74")
+2026-09-13T09:10:48.624Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element/f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.74/click
+2026-09-13T09:10:48.663Z INFO webdriver: RESULT null
+2026-09-13T09:10:48.663Z INFO webdriver: COMMAND findElements("xpath", "//*[contains(@data-testid,'client-card-') and contains(.,"Delete_UI_QA_1789290641784")]")
+2026-09-13T09:10:48.664Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/elements
+2026-09-13T09:10:48.664Z INFO webdriver: DATA {
+  using: 'xpath',
+  value: `//*[contains(@data-testid,'client-card-') and contains(.,"Delete_UI_QA_1789290641784")]`
+}
+2026-09-13T09:10:48.675Z INFO webdriver: RESULT [
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.69'
+  }
+]
+[PASS] Keep It preserves client Delete_UI_QA_1789290641784
+2026-09-13T09:10:48.676Z INFO webdriver: COMMAND performActions(<object>)
+2026-09-13T09:10:48.677Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/actions
+2026-09-13T09:10:48.677Z INFO webdriver: DATA {
+  actions: [
+    {
+      id: 'pointer3',
+      type: 'pointer',
+      parameters: [Object],
+      actions: [Array]
+    }
+  ]
+}
+2026-09-13T09:10:48.915Z INFO webdriver: RESULT null
+2026-09-13T09:10:48.915Z INFO webdriver: COMMAND releaseActions()
+2026-09-13T09:10:48.915Z INFO webdriver: [DELETE] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/actions
+2026-09-13T09:10:48.918Z INFO webdriver: RESULT null
+2026-09-13T09:10:49.224Z INFO webdriver: COMMAND findElement("css selector", "[data-testid="delete-client-eca483e6-e62d-4745-8614-4997727bab86"]")
+2026-09-13T09:10:49.225Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element
+2026-09-13T09:10:49.225Z INFO webdriver: DATA {
+  using: 'css selector',
+  value: '[data-testid="delete-client-eca483e6-e62d-4745-8614-4997727bab86"]'
+}
+2026-09-13T09:10:49.233Z INFO webdriver: RESULT {
+  'element-6066-11e4-a52e-4f735466cecf': 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.70'
+}
+2026-09-13T09:10:49.234Z INFO webdriver: COMMAND findElements("css selector", "[data-testid="delete-client-eca483e6-e62d-4745-8614-4997727bab86"]")
+2026-09-13T09:10:49.234Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/elements
+2026-09-13T09:10:49.234Z INFO webdriver: DATA {
+  using: 'css selector',
+  value: '[data-testid="delete-client-eca483e6-e62d-4745-8614-4997727bab86"]'
+}
+2026-09-13T09:10:49.240Z INFO webdriver: RESULT [
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.70'
+  }
+]
+2026-09-13T09:10:49.242Z INFO webdriver: COMMAND getElementTagName("f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.70")
+2026-09-13T09:10:49.242Z INFO webdriver: [GET] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element/f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.70/name
+2026-09-13T09:10:49.248Z INFO webdriver: RESULT button
+2026-09-13T09:10:49.248Z INFO webdriver: COMMAND elementClick("f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.70")
+2026-09-13T09:10:49.248Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element/f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.70/click
+2026-09-13T09:10:49.300Z INFO webdriver: RESULT null
+2026-09-13T09:10:49.300Z INFO webdriver: COMMAND findElement("css selector", "[data-testid="delete-step1-continue"]")
+2026-09-13T09:10:49.300Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element
+2026-09-13T09:10:49.300Z INFO webdriver: DATA {
+  using: 'css selector',
+  value: '[data-testid="delete-step1-continue"]'
+}
+2026-09-13T09:10:49.308Z INFO webdriver: RESULT {
+  'element-6066-11e4-a52e-4f735466cecf': 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.80'
+}
+2026-09-13T09:10:49.310Z INFO webdriver: COMMAND findElements("css selector", "[data-testid="delete-step1-continue"]")
+2026-09-13T09:10:49.310Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/elements
+2026-09-13T09:10:49.310Z INFO webdriver: DATA {
+  using: 'css selector',
+  value: '[data-testid="delete-step1-continue"]'
+}
+2026-09-13T09:10:49.326Z INFO webdriver: RESULT [
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.80'
+  }
+]
+2026-09-13T09:10:49.331Z INFO webdriver: COMMAND getElementTagName("f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.80")
+2026-09-13T09:10:49.332Z INFO webdriver: [GET] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element/f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.80/name
+2026-09-13T09:10:49.342Z INFO webdriver: RESULT button
+2026-09-13T09:10:49.342Z INFO webdriver: COMMAND elementClick("f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.80")
+2026-09-13T09:10:49.342Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element/f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.80/click
+2026-09-13T09:10:49.428Z INFO webdriver: RESULT null
+2026-09-13T09:10:49.430Z INFO webdriver: COMMAND findElement("css selector", "[data-testid="delete-step2-confirm"]")
+2026-09-13T09:10:49.431Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element
+2026-09-13T09:10:49.431Z INFO webdriver: DATA {
+  using: 'css selector',
+  value: '[data-testid="delete-step2-confirm"]'
+}
+2026-09-13T09:10:49.445Z INFO webdriver: RESULT {
+  'element-6066-11e4-a52e-4f735466cecf': 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.82'
+}
+2026-09-13T09:10:49.449Z INFO webdriver: COMMAND findElements("css selector", "[data-testid="delete-step2-confirm"]")
+2026-09-13T09:10:49.450Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/elements
+2026-09-13T09:10:49.450Z INFO webdriver: DATA {
+  using: 'css selector',
+  value: '[data-testid="delete-step2-confirm"]'
+}
+2026-09-13T09:10:49.463Z INFO webdriver: RESULT [
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.82'
+  }
+]
+2026-09-13T09:10:49.466Z INFO webdriver: COMMAND getElementTagName("f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.82")
+2026-09-13T09:10:49.467Z INFO webdriver: [GET] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element/f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.82/name
+2026-09-13T09:10:49.477Z INFO webdriver: RESULT button
+2026-09-13T09:10:49.477Z INFO webdriver: COMMAND elementClick("f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.82")
+2026-09-13T09:10:49.478Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/element/f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.82/click
+2026-09-13T09:10:50.206Z INFO webdriver: RESULT null
+2026-09-13T09:10:50.207Z INFO webdriver: COMMAND findElements("xpath", "//*[contains(@data-testid,'client-card-') and contains(.,"Delete_UI_QA_1789290641784")]")
+2026-09-13T09:10:50.207Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/elements
+2026-09-13T09:10:50.207Z INFO webdriver: DATA {
+  using: 'xpath',
+  value: `//*[contains(@data-testid,'client-card-') and contains(.,"Delete_UI_QA_1789290641784")]`
+}
+2026-09-13T09:10:50.223Z INFO webdriver: RESULT [
+  {
+    'element-6066-11e4-a52e-4f735466cecf': 'f.C65417A9F09774C05F92CF4FE16843AF.d.BF90AD086D4CEDB0301465602A6B0030.e.69'
+  }
+]
+2026-09-13T09:10:50.315Z INFO webdriver: COMMAND findElements("xpath", "//*[contains(@data-testid,'client-card-') and contains(.,"Delete_UI_QA_1789290641784")]")
+2026-09-13T09:10:50.315Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/elements
+2026-09-13T09:10:50.315Z INFO webdriver: DATA {
+  using: 'xpath',
+  value: `//*[contains(@data-testid,'client-card-') and contains(.,"Delete_UI_QA_1789290641784")]`
+}
+2026-09-13T09:10:50.325Z INFO webdriver: RESULT []
+2026-09-13T09:10:50.326Z INFO webdriver: COMMAND findElements("xpath", "//*[contains(@data-testid,'client-card-') and contains(.,"Delete_UI_QA_1789290641784")]")
+2026-09-13T09:10:50.326Z INFO webdriver: [POST] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e/elements
+2026-09-13T09:10:50.326Z INFO webdriver: DATA {
+  using: 'xpath',
+  value: `//*[contains(@data-testid,'client-card-') and contains(.,"Delete_UI_QA_1789290641784")]`
+}
+2026-09-13T09:10:50.340Z INFO webdriver: RESULT []
+[PASS] Delete Permanently removes record Delete_UI_QA_1789290641784
+2026-09-13T09:10:50.341Z INFO webdriver: COMMAND deleteSession()
+2026-09-13T09:10:50.341Z INFO webdriver: [DELETE] http://127.0.0.1:4444/session/f882f505826176bb4cf3a409293e117e
+2026-09-13T09:10:50.434Z INFO webdriver: RESULT null

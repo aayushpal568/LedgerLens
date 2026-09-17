@@ -1,0 +1,27 @@
+{
+  "summary": "Regression + additive change verification for LedgerLens iteration 4 (SQLite adapter inactive + new scan-local endpoint + Tauri-only local-folder-card). Backend: 12/12 pytest tests pass on live Mongo backend (firm, clients CRUD/404, templates seed+CRUD, file upload/list/soft-delete, full scan pipeline incl. exact_duplicate + wrong_period + missing_doc + unreadable, finding PATCH, CSV/XLSX/PDF reports, cancel-scan 404 + live cancel, and 2 NEW scan-local tests: 400 on invalid folder, 404 on unknown client). Frontend: verified in browser build window.__TAURI__ is false, [data-testid='local-folder-card'] is ABSENT both before and after selecting a client in Scan Workspace; existing upload flow (upload-dropzone, browse-files-button, browse-folder-button, scan-template-select, scan-period-select, start-scan-button) is fully present and unchanged. Nav to Overview & Firm, Client Directory, Checklist Templates, Scan Workspace works. Review/Compare/Reports nav items are gated behind an active client (unchanged pre-existing UX).",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/backend_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py POST /clients/{id}/scan-local correctly returns 404 for unknown client and 400 for non-existent folder (os.path.isdir). Good.",
+    "ScanWorkspace.jsx uses isTauri = !!window.__TAURI__ and only conditionally renders the local-folder-card block — confirmed hidden in the browser build. Good.",
+    "Refactored helpers _make_progress/_finalize_scan/_load_items are shared by _run_scan and _run_local_scan; full upload-based scan pipeline behaves identically to prior iterations (12/12 regressions pass)."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py (added test_scan_local_invalid_folder + test_scan_local_unknown_client)"],
+  "success_rate": { "backend": "100% (12/12)", "frontend": "100%" },
+  "test_credentials": "n/a (no auth)",
+  "seed_data_creation": "Test client 'UI_Test_Client' and 'TEST_Regression Inc' auto-created and cleaned up during tests.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend runs on Mongo by default (DATA_BACKEND unset). REACT_APP_BACKEND_URL must be exported to run pytest (not present in shell env). Frontend nav 'Scan Workspace' item in sidebar is disabled until a client is active — reach it via Overview -> 'Start a Scan' or Client Directory. The local-folder-card is Tauri-only; verify absence via [data-testid='local-folder-card'].",
+  "rca of the issue": "No issues found."
+}

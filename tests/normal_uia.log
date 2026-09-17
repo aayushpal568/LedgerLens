@@ -1,0 +1,8 @@
+WINDOW LedgerLens — Document Checker Tauri Window
+Pane 'LedgerLens — Document Checker' 
+Pane 'LedgerLens — Document Checker - Web content' 
+MenuBar 'System' MenuBar
+MenuItem 'System' 
+Button 'Minimize' 
+Button 'Maximize' 
+Button 'Close' 

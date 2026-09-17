@@ -1,0 +1,47 @@
+[
+  {
+    "name": "Backend reconnects",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "name": "25 findings persist",
+    "pass": true,
+    "detail": "25"
+  },
+  {
+    "name": "Keep decision persists",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "name": "Note persists",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "name": "Review Later decision persists",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "name": "CSV export after restart",
+    "pass": true,
+    "detail": "C:\\Users\\acer\\Downloads\\review_report_Upload_Security_Test.csv"
+  },
+  {
+    "name": "XLSX export after restart",
+    "pass": true,
+    "detail": "C:\\Users\\acer\\Downloads\\review_report_Upload_Security_Test.xlsx"
+  },
+  {
+    "name": "PDF export after restart",
+    "pass": true,
+    "detail": "C:\\Users\\acer\\Downloads\\review_report_Upload_Security_Test.pdf"
+  },
+  {
+    "name": "Restart exports readable and safe",
+    "pass": true,
+    "detail": ""
+  }
+]

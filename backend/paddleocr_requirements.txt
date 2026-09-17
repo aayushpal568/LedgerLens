@@ -1,0 +1,16 @@
+paddlex[ocr-core]<3.8.0,>=3.7.0
+PyYAML>=6
+requests
+aiohttp>=3.8.0
+typing-extensions>=4.12
+paddlex[genai-client,ie,ocr,trans]<3.8.0,>=3.7.0; extra == "all"
+python-docx>=0.8.11; extra == "all"
+python-pptx>=0.6.21; extra == "all"
+openpyxl>=3.0.0; extra == "all"
+paddlex[genai-client,ocr]<3.8.0,>=3.7.0; extra == "doc-parser"
+python-docx>=0.8.11; extra == "doc2md"
+python-pptx>=0.6.21; extra == "doc2md"
+openpyxl>=3.0.0; extra == "doc2md"
+pylatexenc<3,>=2.10; extra == "doc2md"
+paddlex[ie]<3.8.0,>=3.7.0; extra == "ie"
+paddlex[trans]<3.8.0,>=3.7.0; extra == "trans"
