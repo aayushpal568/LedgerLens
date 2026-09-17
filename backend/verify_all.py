@@ -31,6 +31,11 @@ if not RUN_LIVE_CLAUDE:
     os.environ["FAL_API_KEY"] = ""
     os.environ["ANTHROPIC_API_KEY"] = ""
 
+# When no external PostgreSQL database is configured, verify_all runs hermetically on the explicit memory backend
+if not os.environ.get("DATABASE_URL"):
+    os.environ.setdefault("DATA_BACKEND", "memory")
+
+
 import pypdf
 import docx
 import openpyxl

@@ -53,8 +53,7 @@ def test_reports_escape_markup_and_spreadsheet_formulas():
 
 @pytest.fixture
 def api_client(tmp_path, monkeypatch):
-    monkeypatch.setenv("DATA_BACKEND", "postgres")
-    monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@localhost:5432/test")
+    monkeypatch.setenv("DATA_BACKEND", "memory")
     sys.modules.pop("server", None)
     sys.modules.pop("database", None)
     server = importlib.import_module("server")

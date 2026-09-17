@@ -1,25 +1,43 @@
-"""Cloud PostgreSQL data store and database abstraction.
+"""Cloud PostgreSQL data store and database abstraction for LedgerLens.
 
-Prepares LedgerLens for PostgreSQL in production (cloud) while providing
-a clean async collection interface compatible with existing engine/service logic.
-Supports PostgreSQL connections via DATABASE_URL and in-memory execution for tests.
+Provides authoritative PostgreSQL persistence in production using asyncpg connection
+pools and real SQL queries (WHERE, ORDER BY, LIMIT, COUNT, transactions).
+Eliminates silent in-memory fallback: PostgreSQL mode connects to PostgreSQL or fails clearly.
+Provides an explicit MemoryDatabase provider for hermetic local unit testing.
 """
 import json
 import logging
 import os
+import re
 import threading
-from typing import Any, Dict, List, Optional
+import uuid
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 logger = logging.getLogger(__name__)
 
 # Standard collections / tables
 COLLECTIONS = ["firm", "clients", "files", "templates", "scans", "findings"]
 
+_IDENTIFIER_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+
+SUPPORTED_OPERATORS = {"$ne", "$in", "$exists"}
+
+
+def _validate_identifier(name: str) -> str:
+    if not _IDENTIFIER_RE.match(name):
+        raise ValueError(f"Invalid SQL identifier: {name}")
+    return name
+
 
 def _match(doc: dict, filt: dict) -> bool:
     for key, cond in (filt or {}).items():
         val = doc.get(key)
         if isinstance(cond, dict):
+            unsupported = set(cond.keys()) - SUPPORTED_OPERATORS
+            if unsupported:
+                op = sorted(unsupported)[0]
+                raise ValueError(f"Unsupported filter operator: {op}")
             if "$ne" in cond and val == cond["$ne"]:
                 return False
             if "$in" in cond and val not in cond["$in"]:
@@ -30,6 +48,7 @@ def _match(doc: dict, filt: dict) -> bool:
             if val != cond:
                 return False
     return True
+
 
 
 def _project(doc: dict, proj: Optional[dict]) -> dict:
@@ -58,10 +77,150 @@ def _sort(rows: List[dict], sort) -> List[dict]:
     return rows
 
 
-class _Cursor:
-    def __init__(self, collection: "_Collection", filt: dict, proj: Optional[dict]):
+class _InsertResult:
+    def __init__(self, ids: List[str]):
+        self.inserted_id = ids[0] if ids else None
+        self.inserted_ids = ids
+
+
+class _UpdateResult:
+    def __init__(self, matched: int, modified: int, upserted_id: Optional[str] = None):
+        self.matched_count = matched
+        self.modified_count = modified
+        self.upserted_id = upserted_id
+
+
+class _DeleteResult:
+    def __init__(self, deleted: int):
+        self.deleted_count = deleted
+
+
+def _build_sql_where(filt: Optional[dict], start_idx: int = 1) -> Tuple[str, List[Any]]:
+    """Build parameterized SQL WHERE clause and parameter list for PostgreSQL JSONB."""
+    if not filt:
+        return "", []
+
+    clauses: List[str] = []
+    params: List[Any] = []
+
+    def add_param(val: Any) -> str:
+        params.append(val)
+        return f"${start_idx + len(params) - 1}"
+
+    for raw_key, cond in filt.items():
+        key = _validate_identifier(raw_key)
+
+        if isinstance(cond, dict):
+            unsupported = set(cond.keys()) - SUPPORTED_OPERATORS
+            if unsupported:
+                op = sorted(unsupported)[0]
+                raise ValueError(f"Unsupported filter operator: {op}")
+
+        if key == "id":
+            if isinstance(cond, dict):
+                if "$ne" in cond:
+                    p = add_param(str(cond["$ne"]))
+                    clauses.append(f"id != {p}")
+                elif "$in" in cond:
+                    p = add_param([str(x) for x in cond["$in"]])
+                    clauses.append(f"id = ANY({p}::text[])")
+                elif "$exists" in cond:
+                    if cond["$exists"]:
+                        clauses.append("id IS NOT NULL")
+                    else:
+                        clauses.append("id IS NULL")
+            else:
+                p = add_param(str(cond))
+                clauses.append(f"id = {p}")
+        else:
+            if isinstance(cond, dict):
+                if "$ne" in cond:
+                    val = cond["$ne"]
+                    if isinstance(val, bool):
+                        p = add_param(val)
+                        clauses.append(f"(doc->'{key}') IS DISTINCT FROM to_jsonb({p}::boolean)")
+                    elif isinstance(val, (int, float)):
+                        p = add_param(val)
+                        clauses.append(f"(doc->'{key}') IS DISTINCT FROM to_jsonb({p}::numeric)")
+                    elif val is None:
+                        clauses.append(f"(doc ? '{key}' AND doc->'{key}' != 'null'::jsonb)")
+                    else:
+                        p = add_param(str(val))
+                        clauses.append(f"(doc->>'{key}') IS DISTINCT FROM {p}")
+                elif "$in" in cond:
+                    in_vals = cond["$in"]
+                    if all(isinstance(x, str) for x in in_vals):
+                        p = add_param(list(in_vals))
+                        clauses.append(f"(doc->>'{key}') = ANY({p}::text[])")
+                    else:
+                        in_clauses = []
+                        for item in in_vals:
+                            p = add_param(item)
+                            in_clauses.append(f"doc->'{key}' = to_jsonb({p})")
+                        clauses.append(f"({' OR '.join(in_clauses)})" if in_clauses else "FALSE")
+                elif "$exists" in cond:
+                    if cond["$exists"]:
+                        clauses.append(f"(doc ? '{key}' AND doc->'{key}' != 'null'::jsonb)")
+                    else:
+                        clauses.append(f"(NOT (doc ? '{key}') OR doc->'{key}' = 'null'::jsonb)")
+            else:
+                val = cond
+                if isinstance(val, bool):
+                    p = add_param(val)
+                    clauses.append(f"(doc->'{key}') = to_jsonb({p}::boolean)")
+                elif isinstance(val, int):
+                    p = add_param(val)
+                    clauses.append(f"(doc->'{key}') = to_jsonb({p}::bigint)")
+                elif isinstance(val, float):
+                    p = add_param(val)
+                    clauses.append(f"(doc->'{key}') = to_jsonb({p}::numeric)")
+                elif val is None:
+                    clauses.append(f"(NOT (doc ? '{key}') OR doc->'{key}' = 'null'::jsonb)")
+                elif isinstance(val, (dict, list)):
+                    p = add_param(json.dumps(val))
+                    clauses.append(f"(doc->'{key}') = {p}::jsonb")
+                else:
+                    p = add_param(str(val))
+                    clauses.append(f"(doc->>'{key}') = {p}")
+
+    where_str = " WHERE " + " AND ".join(clauses) if clauses else ""
+    return where_str, params
+
+
+def _build_sql_sort(sort) -> str:
+    """Build SQL ORDER BY clause for PostgreSQL queries."""
+    if not sort:
+        return ""
+    if isinstance(sort, str):
+        sort = [(sort, 1)]
+    elif isinstance(sort, tuple) and len(sort) == 2 and not isinstance(sort[0], tuple):
+        sort = [sort]
+
+    order_clauses = []
+    for raw_field, direction in sort:
+        field = _validate_identifier(raw_field)
+        dir_str = "DESC" if direction == -1 else "ASC"
+        nulls_str = "NULLS LAST" if direction == 1 else "NULLS FIRST"
+        if field == "id":
+            order_clauses.append(f"id {dir_str}")
+        elif field in ("confidence", "size", "progress", "processed_files", "total_files", "total_findings", "expected_period"):
+            order_clauses.append(f"COALESCE((doc->>'{field}')::numeric, 0) {dir_str} {nulls_str}")
+        else:
+            order_clauses.append(f"(doc->>'{field}') {dir_str} {nulls_str}")
+
+    return " ORDER BY " + ", ".join(order_clauses) if order_clauses else ""
+
+
+# ---------------------------------------------------------------------------
+# PostgreSQL Implementation
+# ---------------------------------------------------------------------------
+
+class PostgresCursor:
+    """Async cursor for PostgreSQL queries supporting sorting, limits, and projection."""
+
+    def __init__(self, collection: "PostgresCollection", filt: Optional[dict], proj: Optional[dict]):
         self._c = collection
-        self._filt = filt
+        self._filt = filt or {}
         self._proj = proj
         self._sort = None
 
@@ -69,125 +228,189 @@ class _Cursor:
         self._sort = (key, direction) if not isinstance(key, list) else key
         return self
 
-    async def to_list(self, length: Optional[int] = None):
-        rows = await self._c._read_all()
-        rows = [r for r in rows if _match(r, self._filt)]
-        rows = _sort(rows, self._sort)
-        if length is not None:
-            rows = rows[:length]
-        return [_project(r, self._proj) for r in rows]
+    async def to_list(self, length: Optional[int] = None) -> List[dict]:
+        where_sql, params = _build_sql_where(self._filt)
+        order_sql = _build_sql_sort(self._sort)
+        limit_sql = f" LIMIT {int(length)}" if length is not None else ""
+        query = f"SELECT doc FROM {self._c.name}{where_sql}{order_sql}{limit_sql}"
+
+        async with self._c._db.pool.acquire() as conn:
+            records = await conn.fetch(query, *params)
+
+        results = []
+        for r in records:
+            doc = json.loads(r["doc"]) if isinstance(r["doc"], str) else dict(r["doc"])
+            results.append(_project(doc, self._proj))
+        return results
 
 
-class _InsertResult:
-    def __init__(self, ids):
-        self.inserted_id = ids[0] if ids else None
-        self.inserted_ids = ids
+class PostgresCollection:
+    """PostgreSQL table abstraction with collection-style interface."""
 
-
-class _UpdateResult:
-    def __init__(self, matched, modified, upserted_id=None):
-        self.matched_count = matched
-        self.modified_count = modified
-        self.upserted_id = upserted_id
-
-
-class _DeleteResult:
-    def __init__(self, deleted):
-        self.deleted_count = deleted
-
-
-class _Collection:
     def __init__(self, db: "PostgresDatabase", name: str):
         self._db = db
-        self.name = name
+        self.name = _validate_identifier(name)
 
-    async def _read_all(self) -> List[dict]:
-        return await self._db._store_read(self.name)
+    async def find_one(self, filt: Optional[dict] = None, projection: Optional[dict] = None, sort=None) -> Optional[dict]:
+        if not filt:
+            raise ValueError("find_one requires a non-empty filter to prevent returning an arbitrary document.")
+        where_sql, params = _build_sql_where(filt)
+        order_sql = _build_sql_sort(sort)
+        query = f"SELECT doc FROM {self.name}{where_sql}{order_sql} LIMIT 1"
 
-    async def _write_doc(self, doc: dict):
-        await self._db._store_write(self.name, doc)
+        async with self._db.pool.acquire() as conn:
+            record = await conn.fetchrow(query, *params)
 
-    async def _delete_doc(self, doc_id: str):
-        await self._db._store_delete(self.name, doc_id)
+        if not record:
+            return None
+        doc = json.loads(record["doc"]) if isinstance(record["doc"], str) else dict(record["doc"])
+        return _project(doc, projection)
 
-    async def find_one(self, filt: dict, projection: Optional[dict] = None, sort=None):
-        rows = [r for r in await self._read_all() if _match(r, filt)]
-        rows = _sort(rows, sort)
-        return _project(rows[0], projection) if rows else None
+    def find(self, filt: Optional[dict] = None, projection: Optional[dict] = None) -> PostgresCursor:
+        return PostgresCursor(self, filt, projection)
 
-    def find(self, filt: Optional[dict] = None, projection: Optional[dict] = None):
-        return _Cursor(self, filt or {}, projection)
+    async def count_documents(self, filt: Optional[dict] = None) -> int:
+        where_sql, params = _build_sql_where(filt or {})
+        query = f"SELECT COUNT(*) FROM {self.name}{where_sql}"
 
-    async def count_documents(self, filt: Optional[dict] = None):
-        return sum(1 for r in await self._read_all() if _match(r, filt or {}))
+        async with self._db.pool.acquire() as conn:
+            val = await conn.fetchval(query, *params)
+        return int(val or 0)
 
-    async def insert_one(self, doc: dict):
+    async def insert_one(self, doc: dict) -> _InsertResult:
         d = dict(doc)
         d.pop("_id", None)
-        await self._write_doc(d)
-        return _InsertResult([d["id"]])
+        doc_id = str(d["id"])
+        doc_json = json.dumps(d)
+        query = f"""
+            INSERT INTO {self.name} (id, doc, created_at, updated_at)
+            VALUES ($1, $2::jsonb, NOW(), NOW())
+            ON CONFLICT (id) DO UPDATE SET doc = EXCLUDED.doc, updated_at = NOW()
+        """
+        async with self._db.pool.acquire() as conn:
+            await conn.execute(query, doc_id, doc_json)
+        return _InsertResult([doc_id])
 
-    async def insert_many(self, docs: List[dict]):
-        ids = []
+    async def insert_many(self, docs: List[dict]) -> _InsertResult:
+        if not docs:
+            return _InsertResult([])
+        ids: List[str] = []
+        rows: List[Tuple[str, str]] = []
         for doc in docs:
             d = dict(doc)
             d.pop("_id", None)
-            await self._write_doc(d)
-            ids.append(d["id"])
+            doc_id = str(d["id"])
+            ids.append(doc_id)
+            rows.append((doc_id, json.dumps(d)))
+
+        query = f"""
+            INSERT INTO {self.name} (id, doc, created_at, updated_at)
+            VALUES ($1, $2::jsonb, NOW(), NOW())
+            ON CONFLICT (id) DO UPDATE SET doc = EXCLUDED.doc, updated_at = NOW()
+        """
+        async with self._db.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.executemany(query, rows)
         return _InsertResult(ids)
 
-    async def update_one(self, filt: dict, update: dict, upsert: bool = False):
-        rows = await self._read_all()
-        target = next((r for r in rows if _match(r, filt)), None)
-        set_fields = update.get("$set", {})
-        if target is not None:
-            target.update(set_fields)
-            await self._write_doc(target)
-            return _UpdateResult(1, 1)
-        if upsert:
-            new_doc = {k: v for k, v in filt.items() if not isinstance(v, dict)}
-            new_doc.update(set_fields)
-            await self._write_doc(new_doc)
-            return _UpdateResult(0, 0, upserted_id=new_doc.get("id"))
-        return _UpdateResult(0, 0)
+    async def update_one(self, filt: dict, update: dict, upsert: bool = False) -> _UpdateResult:
+        where_sql, params = _build_sql_where(filt)
+        async with self._db.pool.acquire() as conn:
+            async with conn.transaction():
+                query = f"SELECT id, doc FROM {self.name}{where_sql} LIMIT 1 FOR UPDATE"
+                record = await conn.fetchrow(query, *params)
+                set_fields = update.get("$set", {})
+                if record is not None:
+                    doc_id = record["id"]
+                    current_doc = json.loads(record["doc"]) if isinstance(record["doc"], str) else dict(record["doc"])
+                    current_doc.update(set_fields)
+                    await conn.execute(
+                        f"UPDATE {self.name} SET doc = $1::jsonb, updated_at = NOW() WHERE id = $2",
+                        json.dumps(current_doc), doc_id,
+                    )
+                    return _UpdateResult(1, 1)
 
-    async def delete_one(self, filt: dict):
-        rows = await self._read_all()
-        target = next((r for r in rows if _match(r, filt)), None)
-        if target is None:
-            return _DeleteResult(0)
-        await self._delete_doc(str(target["id"]))
-        return _DeleteResult(1)
+                if upsert:
+                    new_doc = {k: v for k, v in filt.items() if not isinstance(v, dict)}
+                    new_doc.update(set_fields)
+                    if "id" not in new_doc:
+                        new_doc["id"] = str(uuid.uuid4())
+                    doc_id = str(new_doc["id"])
+                    await conn.execute(
+                        f"""INSERT INTO {self.name} (id, doc, created_at, updated_at)
+                            VALUES ($1, $2::jsonb, NOW(), NOW())
+                            ON CONFLICT (id) DO UPDATE SET doc = EXCLUDED.doc, updated_at = NOW()""",
+                        doc_id, json.dumps(new_doc),
+                    )
+                    return _UpdateResult(0, 0, upserted_id=doc_id)
 
-    async def delete_many(self, filt: dict):
-        rows = [r for r in await self._read_all() if _match(r, filt)]
-        for r in rows:
-            await self._delete_doc(str(r["id"]))
-        return _DeleteResult(len(rows))
+                return _UpdateResult(0, 0)
+
+    async def delete_one(self, filt: dict) -> _DeleteResult:
+        if not filt:
+            raise ValueError("delete_one requires a non-empty filter to prevent deleting an arbitrary document.")
+        where_sql, params = _build_sql_where(filt)
+        query = f"""
+            DELETE FROM {self.name}
+            WHERE id = (SELECT id FROM {self.name}{where_sql} LIMIT 1)
+            RETURNING id
+        """
+        async with self._db.pool.acquire() as conn:
+            deleted = await conn.fetchrow(query, *params)
+        return _DeleteResult(1 if deleted else 0)
+
+    async def delete_many(self, filt: dict) -> _DeleteResult:
+        where_sql, params = _build_sql_where(filt)
+        query = f"DELETE FROM {self.name}{where_sql}"
+        async with self._db.pool.acquire() as conn:
+            status = await conn.execute(query, *params)
+        try:
+            count = int(status.split()[-1])
+        except (ValueError, IndexError):
+            count = 0
+        return _DeleteResult(count)
 
 
 class PostgresDatabase:
-    """PostgreSQL-backed database manager.
+    """PostgreSQL-backed authoritative database manager.
 
     Stores accounting records as JSONB documents in partitioned PostgreSQL tables,
-    with an in-memory transactional cache and thread-safe fallback for test environments.
+    with an async connection pool. Does NOT fall back to in-memory storage:
+    if PostgreSQL is unreachable or fails, errors are raised clearly.
     """
 
     def __init__(self, database_url: str):
-        self.database_url = database_url
-        self._collections: Dict[str, _Collection] = {}
-        self._memory_data: Dict[str, Dict[str, dict]] = {col: {} for col in COLLECTIONS}
-        self._lock = threading.RLock()
+        if not database_url or not str(database_url).strip():
+            raise ValueError(
+                "DATABASE_URL is required when PostgreSQL backend is configured. "
+                "For test environments without PostgreSQL, explicitly set DATA_BACKEND=memory."
+            )
+        self.database_url = str(database_url).strip()
+        self._collections: Dict[str, PostgresCollection] = {}
         self._pg_pool = None
-        self._use_pg = False
 
-    async def init_pg(self):
-        """Initializes PostgreSQL connection pool and ensures schema exists."""
-        if not self.database_url or "postgres" not in self.database_url:
-            return
+    @property
+    def pool(self):
+        if self._pg_pool is None:
+            raise RuntimeError(
+                "PostgreSQL connection pool is not initialized. Call 'await db.init()' before querying."
+            )
+        return self._pg_pool
+
+    async def init(self):
+        """Initialize PostgreSQL connection pool and ensure required schema exists.
+
+        Fails clearly if PostgreSQL cannot be reached. Never falls back to memory.
+        """
+        import asyncpg
+        safe_url = self.database_url.split("@")[-1] if "@" in self.database_url else self.database_url
         try:
-            import asyncpg
-            self._pg_pool = await asyncpg.create_pool(self.database_url, min_size=1, max_size=10)
+            self._pg_pool = await asyncpg.create_pool(self.database_url, min_size=2, max_size=20)
+        except Exception as e:
+            logger.error(f"Failed to connect to PostgreSQL at {safe_url}: {e}")
+            raise RuntimeError(f"PostgreSQL connection failed: {e}") from e
+
+        try:
             async with self._pg_pool.acquire() as conn:
                 for col in COLLECTIONS:
                     await conn.execute(f"""
@@ -199,69 +422,294 @@ class PostgresDatabase:
                         );
                         CREATE INDEX IF NOT EXISTS idx_{col}_doc ON {col} USING GIN (doc);
                     """)
-            self._use_pg = True
-            logger.info(f"Connected to PostgreSQL database at {self.database_url.split('@')[-1]}")
+            logger.info(f"Connected to PostgreSQL database at {safe_url}")
         except Exception as e:
-            logger.warning(f"PostgreSQL connection unavailable ({e}); using memory store.")
-            self._use_pg = False
+            logger.error(f"Failed to initialize PostgreSQL schema: {e}")
+            raise RuntimeError(f"PostgreSQL schema initialization failed: {e}") from e
 
-    async def _store_read(self, collection_name: str) -> List[dict]:
-        if self._use_pg and self._pg_pool:
-            try:
-                async with self._pg_pool.acquire() as conn:
-                    rows = await conn.fetch(f"SELECT doc FROM {collection_name}")
-                    return [json.loads(r["doc"]) if isinstance(r["doc"], str) else dict(r["doc"]) for r in rows]
-            except Exception as e:
-                logger.error(f"Postgres read error: {e}")
-        with self._lock:
-            return [dict(v) for v in self._memory_data.get(collection_name, {}).values()]
+    async def init_pg(self):
+        """Backward-compatible alias for init()."""
+        await self.init()
 
-    async def _store_write(self, collection_name: str, doc: dict):
-        doc_id = str(doc["id"])
-        if self._use_pg and self._pg_pool:
-            try:
-                async with self._pg_pool.acquire() as conn:
-                    doc_json = json.dumps(doc)
-                    await conn.execute(f"""
-                        INSERT INTO {collection_name} (id, doc, updated_at)
-                        VALUES ($1, $2::jsonb, NOW())
+    async def close(self):
+        """Closes the asyncpg connection pool."""
+        if self._pg_pool is not None:
+            await self._pg_pool.close()
+            self._pg_pool = None
+
+    async def finalize_scan_atomic(self, scan_id: str, scan_update: dict, finding_docs: List[dict]):
+        """Persist findings and update scan status in a single atomic transaction."""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                if finding_docs:
+                    rows = []
+                    for doc in finding_docs:
+                        d = dict(doc)
+                        d.pop("_id", None)
+                        rows.append((str(d["id"]), json.dumps(d)))
+                    query = """
+                        INSERT INTO findings (id, doc, created_at, updated_at)
+                        VALUES ($1, $2::jsonb, NOW(), NOW())
                         ON CONFLICT (id) DO UPDATE SET doc = EXCLUDED.doc, updated_at = NOW()
-                    """, doc_id, doc_json)
-            except Exception as e:
-                logger.error(f"Postgres write error: {e}")
-        with self._lock:
-            col_dict = self._memory_data.setdefault(collection_name, {})
-            col_dict[doc_id] = dict(doc)
+                    """
+                    await conn.executemany(query, rows)
 
-    async def _store_delete(self, collection_name: str, doc_id: str):
-        if self._use_pg and self._pg_pool:
-            try:
-                async with self._pg_pool.acquire() as conn:
-                    await conn.execute(f"DELETE FROM {collection_name} WHERE id = $1", doc_id)
-            except Exception as e:
-                logger.error(f"Postgres delete error: {e}")
-        with self._lock:
-            col_dict = self._memory_data.setdefault(collection_name, {})
-            col_dict.pop(doc_id, None)
+                row = await conn.fetchrow("SELECT id, doc FROM scans WHERE id = $1 FOR UPDATE", scan_id)
+                if row is not None:
+                    current_doc = json.loads(row["doc"]) if isinstance(row["doc"], str) else dict(row["doc"])
+                    current_doc.update(scan_update)
+                    await conn.execute(
+                        "UPDATE scans SET doc = $1::jsonb, updated_at = NOW() WHERE id = $2",
+                        json.dumps(current_doc), scan_id,
+                    )
 
-    def __getattr__(self, name: str) -> _Collection:
+    async def delete_client_cascade(self, client_id: str):
+        """Atomically delete client, files, scans, and findings in a single transaction."""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("""
+                    DELETE FROM findings
+                    WHERE (doc->>'scan_id') IN (
+                        SELECT id FROM scans WHERE (doc->>'client_id') = $1
+                    )
+                """, client_id)
+                await conn.execute("DELETE FROM scans WHERE (doc->>'client_id') = $1", client_id)
+                await conn.execute("DELETE FROM files WHERE (doc->>'client_id') = $1", client_id)
+                await conn.execute("DELETE FROM clients WHERE id = $1", client_id)
+
+    def __getattr__(self, name: str) -> PostgresCollection:
         if name.startswith("_"):
             raise AttributeError(name)
         if name not in self._collections:
-            self._collections[name] = _Collection(self, name)
+            self._collections[name] = PostgresCollection(self, name)
         return self._collections[name]
 
-    def close(self):
-        if self._pg_pool:
-            pass
 
 
-_db_instance: Optional[PostgresDatabase] = None
+# ---------------------------------------------------------------------------
+# In-Memory Implementation (Explicit Test Backend)
+# ---------------------------------------------------------------------------
+
+class MemoryCursor:
+    """Async cursor for in-memory collections."""
+
+    def __init__(self, collection: "MemoryCollection", filt: dict, proj: Optional[dict]):
+        self._c = collection
+        self._filt = filt
+        self._proj = proj
+        self._sort = None
+
+    def sort(self, key, direction=1):
+        self._sort = (key, direction) if not isinstance(key, list) else key
+        return self
+
+    async def to_list(self, length: Optional[int] = None) -> List[dict]:
+        with self._c._db._lock:
+            rows = [dict(v) for v in self._c._db._data.get(self._c.name, {}).values() if _match(v, self._filt)]
+        rows = _sort(rows, self._sort)
+        if length is not None:
+            rows = rows[:length]
+        return [_project(r, self._proj) for r in rows]
 
 
-def get_database(database_url: Optional[str] = None) -> PostgresDatabase:
+class MemoryCollection:
+    """In-memory collection for unit testing without external infrastructure."""
+
+    def __init__(self, db: "MemoryDatabase", name: str):
+        self._db = db
+        self.name = name
+
+    async def find_one(self, filt: Optional[dict] = None, projection: Optional[dict] = None, sort=None) -> Optional[dict]:
+        if not filt:
+            raise ValueError("find_one requires a non-empty filter to prevent returning an arbitrary document.")
+        with self._db._lock:
+            rows = [dict(v) for v in self._db._data.get(self.name, {}).values() if _match(v, filt)]
+        rows = _sort(rows, sort)
+        return _project(rows[0], projection) if rows else None
+
+    def find(self, filt: Optional[dict] = None, projection: Optional[dict] = None) -> MemoryCursor:
+        return MemoryCursor(self, filt or {}, projection)
+
+    async def count_documents(self, filt: Optional[dict] = None) -> int:
+        with self._db._lock:
+            return sum(1 for v in self._db._data.get(self.name, {}).values() if _match(v, filt or {}))
+
+    async def insert_one(self, doc: dict) -> _InsertResult:
+        d = dict(doc)
+        d.pop("_id", None)
+        doc_id = str(d["id"])
+        with self._db._lock:
+            self._db._data.setdefault(self.name, {})[doc_id] = d
+        return _InsertResult([doc_id])
+
+    async def insert_many(self, docs: List[dict]) -> _InsertResult:
+        if not docs:
+            return _InsertResult([])
+        ids: List[str] = []
+        with self._db._lock:
+            col = self._db._data.setdefault(self.name, {})
+            backup = dict(col)
+            try:
+                for doc in docs:
+                    d = dict(doc)
+                    d.pop("_id", None)
+                    doc_id = str(d["id"])
+                    col[doc_id] = d
+                    ids.append(doc_id)
+                return _InsertResult(ids)
+            except Exception:
+                self._db._data[self.name] = backup
+                raise
+
+    async def update_one(self, filt: dict, update: dict, upsert: bool = False) -> _UpdateResult:
+        with self._db._lock:
+            col = self._db._data.setdefault(self.name, {})
+            target = next((v for v in col.values() if _match(v, filt)), None)
+            set_fields = update.get("$set", {})
+            if target is not None:
+                target.update(set_fields)
+                return _UpdateResult(1, 1)
+            if upsert:
+                new_doc = {k: v for k, v in filt.items() if not isinstance(v, dict)}
+                new_doc.update(set_fields)
+                if "id" not in new_doc:
+                    new_doc["id"] = str(uuid.uuid4())
+                doc_id = str(new_doc["id"])
+                col[doc_id] = new_doc
+                return _UpdateResult(0, 0, upserted_id=doc_id)
+            return _UpdateResult(0, 0)
+
+    async def delete_one(self, filt: dict) -> _DeleteResult:
+        if not filt:
+            raise ValueError("delete_one requires a non-empty filter to prevent deleting an arbitrary document.")
+        with self._db._lock:
+            col = self._db._data.setdefault(self.name, {})
+            target_id = next((k for k, v in col.items() if _match(v, filt)), None)
+            if target_id is None:
+                return _DeleteResult(0)
+            col.pop(target_id, None)
+            return _DeleteResult(1)
+
+    async def delete_many(self, filt: dict) -> _DeleteResult:
+        with self._db._lock:
+            col = self._db._data.setdefault(self.name, {})
+            target_ids = [k for k, v in col.items() if _match(v, filt)]
+            for tid in target_ids:
+                col.pop(tid, None)
+            return _DeleteResult(len(target_ids))
+
+
+class MemoryDatabase:
+    """Explicit in-memory database provider for local unit tests and environments
+    without external PostgreSQL infrastructure.
+    """
+
+    def __init__(self):
+        self._collections: Dict[str, MemoryCollection] = {}
+        self._data: Dict[str, Dict[str, dict]] = {col: {} for col in COLLECTIONS}
+        self._lock = threading.RLock()
+
+    async def init(self):
+        pass
+
+    async def init_pg(self):
+        pass
+
+    async def close(self):
+        with self._lock:
+            self._data.clear()
+
+    async def finalize_scan_atomic(self, scan_id: str, scan_update: dict, finding_docs: List[dict]):
+        """Atomically persist findings and update scan status."""
+        with self._lock:
+            findings_backup = dict(self._data.get("findings", {}))
+            scans_backup = dict(self._data.get("scans", {}))
+            try:
+                col_f = self._data.setdefault("findings", {})
+                for doc in finding_docs:
+                    d = dict(doc)
+                    d.pop("_id", None)
+                    col_f[str(d["id"])] = d
+                scan = self._data.setdefault("scans", {}).get(scan_id)
+                if scan is not None:
+                    scan.update(scan_update)
+            except Exception:
+                self._data["findings"] = findings_backup
+                self._data["scans"] = scans_backup
+                raise
+
+    async def delete_client_cascade(self, client_id: str):
+        """Atomically delete client, files, scans, and findings."""
+        with self._lock:
+            backup = {col: dict(self._data.get(col, {})) for col in COLLECTIONS}
+            try:
+                scan_ids = [
+                    sid for sid, s in self._data.get("scans", {}).items()
+                    if s.get("client_id") == client_id
+                ]
+                self._data["findings"] = {
+                    fid: f for fid, f in self._data.get("findings", {}).items()
+                    if f.get("scan_id") not in scan_ids
+                }
+                self._data["scans"] = {
+                    sid: s for sid, s in self._data.get("scans", {}).items()
+                    if s.get("client_id") != client_id
+                }
+                self._data["files"] = {
+                    fid: f for fid, f in self._data.get("files", {}).items()
+                    if f.get("client_id") != client_id
+                }
+                self._data.get("clients", {}).pop(client_id, None)
+            except Exception:
+                self._data.update(backup)
+                raise
+
+    def __getattr__(self, name: str) -> MemoryCollection:
+        if name.startswith("_"):
+            raise AttributeError(name)
+        if name not in self._collections:
+            self._collections[name] = MemoryCollection(self, name)
+        return self._collections[name]
+
+
+# ---------------------------------------------------------------------------
+# Factory
+# ---------------------------------------------------------------------------
+
+_db_instance: Optional[Union[PostgresDatabase, MemoryDatabase]] = None
+
+
+def get_database(
+    database_url: Optional[str] = None,
+    backend: Optional[str] = None,
+    reset: bool = False,
+) -> Union[PostgresDatabase, MemoryDatabase]:
+    """Factory to acquire database instance based on backend configuration.
+
+    Modes:
+    - 'postgres': authoritative PostgreSQL persistence via DATABASE_URL.
+      Fails clearly if DATABASE_URL is missing or connection fails.
+    - 'memory': explicit in-memory provider for unit tests.
+    """
     global _db_instance
-    if _db_instance is None:
-        url = database_url or os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/ledgerlens")
-        _db_instance = PostgresDatabase(url)
-    return _db_instance
+    if _db_instance is not None and not reset:
+        return _db_instance
+
+    target_backend = (backend or os.environ.get("DATA_BACKEND", "postgres")).strip().lower()
+
+    if target_backend in ("memory", "test", "inmemory"):
+        instance: Union[PostgresDatabase, MemoryDatabase] = MemoryDatabase()
+    elif target_backend == "postgres":
+        url = database_url if database_url is not None else os.environ.get("DATABASE_URL", "").strip()
+        if not url:
+            raise ValueError(
+                "DATABASE_URL is required when PostgreSQL backend is configured. "
+                "For test environments without PostgreSQL, explicitly set DATA_BACKEND=memory."
+            )
+        instance = PostgresDatabase(url)
+    else:
+        raise ValueError(f"Unsupported DATA_BACKEND: '{target_backend}'. Must be 'postgres' or 'memory'.")
+
+    if not reset:
+        _db_instance = instance
+    return instance

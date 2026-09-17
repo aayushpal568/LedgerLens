@@ -25,19 +25,18 @@ except Exception:
     pass
 
 # Production Data Backend: PostgreSQL (configurable via DATABASE_URL)
-DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/ledgerlens")
-DATA_BACKEND = os.environ.get("DATA_BACKEND", "postgres").lower()
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+DATA_BACKEND = os.environ.get("DATA_BACKEND", "postgres").lower().strip()
 
-if DATA_BACKEND == "mongo":
-    from motor.motor_asyncio import AsyncIOMotorClient
-    mongo_url = os.environ.get("MONGO_URL", "mongodb://127.0.0.1:27017")
-    client = AsyncIOMotorClient(mongo_url)
-    db = client[os.environ.get("DB_NAME", "ledgerlens")]
-else:
-    # PostgreSQL / Cloud Database layer
-    from database import get_database
-    client = None
-    db = get_database(DATABASE_URL)
+from database import get_database
+
+config_error: Optional[str] = None
+try:
+    db = get_database(DATABASE_URL or None, DATA_BACKEND, reset=True)
+except Exception as e:
+    config_error = str(e)
+    db = None
+
 
 app = FastAPI(title="LedgerLens Cloud Accounting AI API")
 api_router = APIRouter(prefix="/api")
@@ -163,12 +162,15 @@ async def get_client(client_id: str):
 
 @api_router.delete("/clients/{client_id}")
 async def delete_client(client_id: str):
-    await db.clients.delete_one({"id": client_id})
-    await db.files.delete_many({"client_id": client_id})
-    scans = await db.scans.find({"client_id": client_id}, {"id": 1}).to_list(1000)
-    for s in scans:
-        await db.findings.delete_many({"scan_id": s["id"]})
-    await db.scans.delete_many({"client_id": client_id})
+    if hasattr(db, "delete_client_cascade"):
+        await db.delete_client_cascade(client_id)
+    else:
+        await db.clients.delete_one({"id": client_id})
+        await db.files.delete_many({"client_id": client_id})
+        scans = await db.scans.find({"client_id": client_id}, {"id": 1}).to_list(1000)
+        for s in scans:
+            await db.findings.delete_many({"scan_id": s["id"]})
+        await db.scans.delete_many({"client_id": client_id})
     return {"ok": True}
 
 
@@ -287,22 +289,23 @@ async def _finalize_scan(scan_id: str, client_id: str, result: dict):
             "id": new_id(), "scan_id": scan_id, "client_id": client_id,
             "status": "unreviewed", "note": "", "created_at": now_iso(), **fnd,
         })
-    if finding_docs:
-        await db.findings.insert_many([dict(d) for d in finding_docs])
+    scan_update = {
+        "status": "completed", "progress": 100,
+        "processed_files": result["processed"],
+        "total_files": result["total"],
+        "counts": result["counts"],
+        "skipped_files": result["skipped"],
+        "file_states": file_states,
+        "total_findings": len(finding_docs),
+        "completed_at": now_iso(),
+    }
+    if hasattr(db, "finalize_scan_atomic"):
+        await db.finalize_scan_atomic(scan_id, scan_update, finding_docs)
+    else:
+        if finding_docs:
+            await db.findings.insert_many([dict(d) for d in finding_docs])
+        await db.scans.update_one({"id": scan_id}, {"$set": scan_update})
 
-    await db.scans.update_one(
-        {"id": scan_id},
-        {"$set": {
-            "status": "completed", "progress": 100,
-            "processed_files": result["processed"],
-            "total_files": result["total"],
-            "counts": result["counts"],
-            "skipped_files": result["skipped"],
-            "file_states": file_states,
-            "total_findings": len(finding_docs),
-            "completed_at": now_iso(),
-        }},
-    )
 
 
 async def _load_items(template_id: Optional[str]):
@@ -476,8 +479,12 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def seed_defaults():
-    if hasattr(db, "init_pg"):
-        await db.init_pg()
+    if config_error:
+        raise RuntimeError(f"Database configuration error: {config_error}")
+    if db is None:
+        raise RuntimeError("Database instance is not initialized.")
+    if hasattr(db, "init"):
+        await db.init()
     try:
         storage.init_storage()
         logger.info("Object storage initialized")
@@ -492,10 +499,11 @@ async def seed_defaults():
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
-    if client is not None:
-        client.close()
-    elif hasattr(db, "close"):
-        db.close()
+    if db is not None and hasattr(db, "close"):
+        res = db.close()
+        if asyncio.iscoroutine(res):
+            await res
+
 
 
 if __name__ == "__main__":
