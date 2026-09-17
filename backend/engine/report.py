@@ -34,16 +34,49 @@ def _spreadsheet_safe(value):
     return value
 
 
+def _is_ai_involved(f: dict) -> tuple:
+    """Check if AI / LLM contributed to this finding, its files, or its evidence."""
+    tags = []
+    if f.get("ai_assisted") or f.get("provenance") == "llm":
+        tags.append("AI-Assisted")
+    if f.get("classified_by") == "llm":
+        tags.append("AI Classified")
+    if f.get("detected_by") == "llm":
+        tags.append("AI Period Detected")
+    ev = f.get("evidence") or {}
+    if ev.get("classified_by") == "llm":
+        tags.append("AI Classified")
+    if ev.get("detected_by") == "llm":
+        tags.append("AI Period Detected")
+    for file_info in f.get("files", []):
+        if file_info.get("classified_by") == "llm":
+            tags.append("AI Classified File")
+        period = file_info.get("period") or {}
+        if isinstance(period, dict) and period.get("detected_by") == "llm":
+            tags.append("AI Period Detected File")
+    if tags:
+        return True, ", ".join(dict.fromkeys(tags))
+    return False, ""
+
+
 def _rows(findings):
     for f in findings:
+        is_ai, ai_label = _is_ai_involved(f)
+        conf_str = f"{f.get('confidence', 0)}% ({f.get('confidence_level', '')})"
+        ev_str = (f.get("evidence", {}) or {}).get("summary", "")
+
+        if is_ai:
+            conf_str += f" [AI: {ai_label}]"
+            ev_str = f"{ev_str} (AI/LLM: {ai_label})" if ev_str else f"AI/LLM: {ai_label}"
+
         yield [
             CATEGORY_LABELS.get(f["category"], f["category"]),
             f.get("title", ""),
             "; ".join(x["name"] for x in f.get("files", [])),
-            f"{f.get('confidence', 0)}% ({f.get('confidence_level', '')})",
+            conf_str,
             STATUS_LABELS.get(f.get("status", "unreviewed"), f.get("status", "")),
             f.get("note", "") or "",
-            (f.get("evidence", {}) or {}).get("summary", ""),
+            ev_str,
         ]
 
 

@@ -7,6 +7,8 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from unittest.mock import patch
+
 from engine import (  # noqa: E402
     build_default_engine, LocalDirectoryFileSource, LocalPathFileSource,
     NoOpOCRProvider, NoOpLLMProvider,
@@ -97,9 +99,10 @@ def test_noop_llm_provider_safe():
 
 
 def test_build_default_engine_uses_safe_providers():
-    engine = build_default_engine()
-    assert engine.ocr is not None
-    assert engine.llm is not None
-    assert engine.ocr.available is False
-    assert engine.llm.available is False
+    with patch.dict(os.environ, {"FAL_KEY": "", "FAL_API_KEY": "", "ANTHROPIC_API_KEY": ""}, clear=False):
+        engine = build_default_engine()
+        assert engine.ocr is not None
+        assert engine.llm is not None
+        assert engine.ocr.available is False
+        assert engine.llm.available is False
 

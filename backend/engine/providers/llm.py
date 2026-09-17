@@ -40,6 +40,9 @@ DEFAULT_ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages"
 DEFAULT_ANTHROPIC_MODEL = "claude-3-opus-20240229"
 DEFAULT_TIMEOUT = 60
 DEFAULT_MAX_TOKENS = 4096
+DEFAULT_SHORT_MAX_TOKENS = 256
+DEFAULT_FIELD_MAX_TOKENS = 128
+DEFAULT_SHORT_TIMEOUT = int(os.environ.get("LLM_SHORT_TIMEOUT", "15"))
 MAX_TEXT_CONTEXT_CHARS = 16000  # Cap input text to avoid token limits
 
 
@@ -51,6 +54,42 @@ def _mask_secret(val: Optional[str]) -> str:
     if len(val) <= 6:
         return "***"
     return f"{val[:3]}...{val[-3:]}"
+
+
+class ClassificationResult(str):
+    """String subclass providing label, confidence, and reasoning for backward compatibility."""
+
+    def __new__(cls, label: str, confidence: float = 1.0, reasoning: str = ""):
+        obj = super().__new__(cls, label)
+        obj.label = label
+        obj.confidence = float(confidence)
+        obj.reasoning = str(reasoning or "")
+        return obj
+
+    def __getitem__(self, item):
+        if item in ("label", "classification"):
+            return self.label
+        if item == "confidence":
+            return self.confidence
+        if item == "reasoning":
+            return self.reasoning
+        return super().__getitem__(item)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        if key in ("label", "classification"):
+            return self.label
+        if key == "confidence":
+            return self.confidence
+        if key == "reasoning":
+            return self.reasoning
+        return default
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "label": self.label,
+            "confidence": self.confidence,
+            "reasoning": self.reasoning,
+        }
 
 
 class NoOpLLMProvider(LLMProvider):
@@ -68,10 +107,10 @@ class NoOpLLMProvider(LLMProvider):
             "mode": "noop",
         }
 
-    def classify_document(self, text: str, candidate_types: Iterable[str]) -> Optional[str]:
+    def classify_document(self, text: str, candidate_types: Iterable[str], **kwargs) -> Optional[Any]:
         return None
 
-    def extract_field(self, text: str, field: str) -> Optional[str]:
+    def extract_field(self, text: str, field: str, **kwargs) -> Optional[str]:
         return None
 
     def analyze_document(self, text: str, prompt: str) -> Optional[dict]:
@@ -96,6 +135,7 @@ class ClaudeOpusFalProvider(LLMProvider):
         anthropic_model: Optional[str] = None,
         timeout: Optional[int] = None,
         max_tokens: Optional[int] = None,
+        short_timeout: Optional[int] = None,
     ):
         self._fal_key = (
             api_key
@@ -139,6 +179,9 @@ class ClaudeOpusFalProvider(LLMProvider):
         max_tokens_env = os.environ.get("FAL_LLM_MAX_TOKENS") or os.environ.get("LLM_MAX_TOKENS")
         self._max_tokens = max_tokens if max_tokens is not None else (int(max_tokens_env) if max_tokens_env else DEFAULT_MAX_TOKENS)
 
+        short_timeout_env = os.environ.get("FAL_LLM_SHORT_TIMEOUT") or os.environ.get("LLM_SHORT_TIMEOUT")
+        self._short_timeout = short_timeout if short_timeout is not None else (int(short_timeout_env) if short_timeout_env else DEFAULT_SHORT_TIMEOUT)
+
     @property
     def available(self) -> bool:
         """Available if either fal.ai key or direct Anthropic key is configured."""
@@ -167,6 +210,7 @@ class ClaudeOpusFalProvider(LLMProvider):
             "anthropic_key_configured": str(bool(self._anthropic_key)),
             "anthropic_key_masked": _mask_secret(self._anthropic_key),
             "timeout": str(self._timeout),
+            "short_timeout": str(self._short_timeout),
             "max_tokens": str(self._max_tokens),
         }
 
@@ -178,6 +222,8 @@ class ClaudeOpusFalProvider(LLMProvider):
         prompt: str,
         system_prompt: Optional[str] = None,
         temperature: float = 0.0,
+        max_tokens: Optional[int] = None,
+        timeout: Optional[int] = None,
     ) -> Optional[str]:
         """Send prompt to Claude Opus via fal.ai (or Anthropic fallback).
 
@@ -192,9 +238,9 @@ class ClaudeOpusFalProvider(LLMProvider):
             return None
 
         if self.backend_mode == "fal_ai":
-            return self._call_fal(prompt, system_prompt=system_prompt, temperature=temperature)
+            return self._call_fal(prompt, system_prompt=system_prompt, temperature=temperature, max_tokens=max_tokens, timeout=timeout)
         elif self.backend_mode == "anthropic_direct":
-            return self._call_anthropic(prompt, system_prompt=system_prompt, temperature=temperature)
+            return self._call_anthropic(prompt, system_prompt=system_prompt, temperature=temperature, max_tokens=max_tokens, timeout=timeout)
         return None
 
     def _call_fal(
@@ -202,6 +248,8 @@ class ClaudeOpusFalProvider(LLMProvider):
         prompt: str,
         system_prompt: Optional[str] = None,
         temperature: float = 0.0,
+        max_tokens: Optional[int] = None,
+        timeout: Optional[int] = None,
     ) -> Optional[str]:
         """Invoke fal.ai inference endpoint (supports OpenRouter OpenAI-compatible and Any-LLM)."""
         is_openai_compat = ("openai" in self._endpoint) or ("openrouter" in self._endpoint) or ("chat/completions" in self._endpoint)
@@ -214,6 +262,9 @@ class ClaudeOpusFalProvider(LLMProvider):
             "Content-Type": "application/json",
         }
 
+        eff_tokens = max_tokens if max_tokens is not None else self._max_tokens
+        eff_timeout = timeout if timeout is not None else self._timeout
+
         if is_openai_compat:
             messages: List[Dict[str, str]] = []
             if system_prompt:
@@ -223,14 +274,14 @@ class ClaudeOpusFalProvider(LLMProvider):
                 "model": self._model,
                 "messages": messages,
                 "temperature": temperature,
-                "max_tokens": self._max_tokens,
+                "max_tokens": eff_tokens,
             }
         else:
             payload = {
                 "prompt": prompt,
                 "model": self._model,
                 "temperature": temperature,
-                "max_tokens": self._max_tokens,
+                "max_tokens": eff_tokens,
                 "priority": "latency",
             }
             if system_prompt:
@@ -238,11 +289,11 @@ class ClaudeOpusFalProvider(LLMProvider):
 
         logger.info(
             "Calling fal.ai Claude Opus endpoint %s with model %s (max_tokens=%d)",
-            target_url, self._model, self._max_tokens,
+            target_url, self._model, eff_tokens,
         )
 
         try:
-            with httpx.Client(timeout=self._timeout) as client:
+            with httpx.Client(timeout=eff_timeout) as client:
                 res = client.post(target_url, json=payload, headers=headers)
                 if res.status_code in (401, 403):
                     logger.error("fal.ai authentication failed (HTTP %d). Check FAL_KEY.", res.status_code)
@@ -277,7 +328,7 @@ class ClaudeOpusFalProvider(LLMProvider):
                 return None
 
         except httpx.TimeoutException:
-            logger.warning("fal.ai request timed out after %ds", self._timeout)
+            logger.warning("fal.ai request timed out after %ds", eff_timeout)
             return None
         except httpx.HTTPStatusError as e:
             logger.error("fal.ai HTTP error %s: %s", e.response.status_code, e.response.text[:200])
@@ -291,6 +342,8 @@ class ClaudeOpusFalProvider(LLMProvider):
         prompt: str,
         system_prompt: Optional[str] = None,
         temperature: float = 0.0,
+        max_tokens: Optional[int] = None,
+        timeout: Optional[int] = None,
     ) -> Optional[str]:
         """Invoke Anthropic Messages API directly as an interchangeable fallback."""
         headers = {
@@ -298,9 +351,12 @@ class ClaudeOpusFalProvider(LLMProvider):
             "anthropic-version": "2023-06-01",
             "Content-Type": "application/json",
         }
+        eff_tokens = max_tokens if max_tokens is not None else self._max_tokens
+        eff_timeout = timeout if timeout is not None else self._timeout
+
         payload: Dict[str, Any] = {
             "model": self._anthropic_model,
-            "max_tokens": self._max_tokens,
+            "max_tokens": eff_tokens,
             "temperature": temperature,
             "messages": [{"role": "user", "content": prompt}],
         }
@@ -309,11 +365,11 @@ class ClaudeOpusFalProvider(LLMProvider):
 
         logger.info(
             "Calling Anthropic API directly for model %s (max_tokens=%d)",
-            self._anthropic_model, self._max_tokens,
+            self._anthropic_model, eff_tokens,
         )
 
         try:
-            with httpx.Client(timeout=self._timeout) as client:
+            with httpx.Client(timeout=eff_timeout) as client:
                 res = client.post(self._anthropic_endpoint, json=payload, headers=headers)
                 if res.status_code in (401, 403):
                     logger.error("Anthropic auth failed (HTTP %d). Check ANTHROPIC_API_KEY.", res.status_code)
@@ -332,7 +388,7 @@ class ClaudeOpusFalProvider(LLMProvider):
                 return None
 
         except httpx.TimeoutException:
-            logger.warning("Anthropic request timed out after %ds", self._timeout)
+            logger.warning("Anthropic request timed out after %ds", eff_timeout)
             return None
         except Exception as e:
             logger.error("Anthropic request failure: %s", str(e))
@@ -346,6 +402,8 @@ class ClaudeOpusFalProvider(LLMProvider):
         prompt: str,
         system_prompt: Optional[str] = None,
         schema_hint: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        timeout: Optional[int] = None,
     ) -> Optional[dict]:
         """Query Claude Opus and return parsed structured JSON.
 
@@ -359,7 +417,13 @@ class ClaudeOpusFalProvider(LLMProvider):
         if schema_hint:
             prompt = f"{prompt}\n\nRequired JSON Schema / Fields:\n{schema_hint}"
 
-        raw_output = self.generate(prompt, system_prompt=json_system, temperature=0.0)
+        raw_output = self.generate(
+            prompt,
+            system_prompt=json_system,
+            temperature=0.0,
+            max_tokens=max_tokens,
+            timeout=timeout,
+        )
         if not raw_output:
             return None
 
@@ -402,7 +466,12 @@ class ClaudeOpusFalProvider(LLMProvider):
     # ------------------------------------------------------------------
     # LLMProvider interface implementations
     # ------------------------------------------------------------------
-    def classify_document(self, text: str, candidate_types: Iterable[str]) -> Optional[str]:
+    def classify_document(
+        self,
+        text: str,
+        candidate_types: Iterable[str],
+        return_dict: bool = False,
+    ) -> Optional[Union[ClassificationResult, Dict[str, Any], str]]:
         """Classify document text into one of the candidate types using Claude Opus."""
         candidates = list(candidate_types)
         if not candidates:
@@ -424,20 +493,44 @@ class ClaudeOpusFalProvider(LLMProvider):
         res = self.query_json(
             prompt=prompt,
             system_prompt="You are an expert CPA auditor and document categorization engine.",
+            max_tokens=DEFAULT_SHORT_MAX_TOKENS,
+            timeout=self._short_timeout,
         )
         if not res or not isinstance(res, dict):
             return None
 
-        classification = res.get("classification")
+        classification = res.get("classification") or res.get("label")
         if not classification or not isinstance(classification, str):
             return None
 
+        try:
+            confidence = float(res.get("confidence", 0.0))
+        except (ValueError, TypeError):
+            confidence = 0.0
+        reasoning = str(res.get("reasoning") or "")
+
         # Validate against candidate list (case-insensitive)
+        matched_candidate = None
         for c in candidates:
             if c.lower() == classification.strip().lower():
-                return c
+                matched_candidate = c
+                break
 
-        return None
+        if not matched_candidate:
+            return None
+
+        if return_dict:
+            return {
+                "label": matched_candidate,
+                "confidence": confidence,
+                "reasoning": reasoning,
+            }
+
+        return ClassificationResult(
+            label=matched_candidate,
+            confidence=confidence,
+            reasoning=reasoning,
+        )
 
     def extract_field(self, text: str, field: str) -> Optional[str]:
         """Extract a specific accounting field (e.g. 'tax_year', 'vendor', 'invoice_no')."""
@@ -459,6 +552,8 @@ class ClaudeOpusFalProvider(LLMProvider):
         res = self.query_json(
             prompt=prompt,
             system_prompt="You are an accounting data extraction model. Extract accurate values.",
+            max_tokens=DEFAULT_FIELD_MAX_TOKENS,
+            timeout=self._short_timeout,
         )
         if not res or not isinstance(res, dict):
             return None

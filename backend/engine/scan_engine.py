@@ -11,18 +11,24 @@ Scales to large folders:
 - Near-duplicate detection uses MinHash LSH when available (O(n) buckets)
   instead of O(n^2) pairwise, with an exact-similarity confirmation step.
 
-No cloud processing. Documents are never sent to any external service.
+Deterministic processing stays local. Ambiguous cases may send document text
+to the configured external LLM provider (e.g. Claude Opus via fal.ai).
 """
+import hashlib
+import logging
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import combinations
-from typing import Callable, Optional
+from typing import Callable, Optional, Dict, Any, List
 
 from .hashing import sha256_of_file
 from .checklist import detect_period, match_item
 from .similarity import normalize, similarity, token_set
 from .models import CATEGORIES, STATUS_OK
 from .interfaces import FileSource, DocumentExtractor, OCRProvider, LLMProvider
+
+logger = logging.getLogger("ledgerlens.scan_engine")
 
 SIMILARITY_THRESHOLD = 0.82
 LSH_MIN_FILES = 60            # below this, exact pairwise is cheap enough
@@ -31,6 +37,8 @@ LSH_THRESHOLD = 0.8          # bucket threshold; exact confirm still applies
 MAX_TEXT_CHARS = 8000         # cap stored text to bound memory on huge folders
 MAX_DUP_COMPARISONS = 200000  # hard bound on pairwise similarity checks
 MAX_POSSIBLE_DUP_FINDINGS = 1000  # stop emitting once this many are found
+LLM_MAX_CALLS_PER_SCAN = 5
+LLM_MIN_CONFIDENCE = 0.80
 UNREADABLE_STATUSES = {"needs_ocr", "password", "error", "empty"}
 UNREADABLE_LABEL = {
     "needs_ocr": "Scanned image — OCR required",
@@ -57,6 +65,8 @@ def _file_view(f: dict) -> dict:
         "sha256": f.get("sha256", ""),
         "period": f.get("period"),
         "status": f.get("status"),
+        "classified_by": f.get("classified_by"),
+        "classification": f.get("classification"),
     }
 
 
@@ -64,11 +74,25 @@ class ScanEngine:
     def __init__(self, extractor: DocumentExtractor,
                  ocr_provider: Optional[OCRProvider] = None,
                  llm_provider: Optional[LLMProvider] = None,
-                 max_workers: Optional[int] = None):
+                 max_workers: Optional[int] = None,
+                 llm_max_calls: Optional[int] = None,
+                 llm_min_confidence: Optional[float] = None):
         self.extractor = extractor
         self.ocr = ocr_provider
-        self.llm = llm_provider  # held for future hard-case hints; not decision-making
+        self.llm = llm_provider  # LLM provider for ambiguous checklist classification and period extraction
         self.max_workers = max_workers or min(16, (os.cpu_count() or 4) * 2)
+
+        if llm_max_calls is not None:
+            self.llm_max_calls = int(llm_max_calls)
+        else:
+            env_calls = os.environ.get("LLM_MAX_CALLS_PER_SCAN")
+            self.llm_max_calls = int(env_calls) if env_calls is not None and env_calls != "" else LLM_MAX_CALLS_PER_SCAN
+
+        if llm_min_confidence is not None:
+            self.llm_min_confidence = float(llm_min_confidence)
+        else:
+            env_conf = os.environ.get("LLM_MIN_CONFIDENCE")
+            self.llm_min_confidence = float(env_conf) if env_conf is not None and env_conf != "" else LLM_MIN_CONFIDENCE
 
     # ------------------------------ per-file ------------------------------
     def _process_file(self, source: FileSource, ref, should_cancel=None):
@@ -145,8 +169,26 @@ class ScanEngine:
         findings = []
         findings += self._exact_duplicates(files)
         findings += self._possible_duplicates(files)
-        findings += self._checklist_checks(files, checklist_items)
-        findings += self._wrong_period(files, expected_period)
+
+        llm_budget = {"calls_made": 0, "max_calls": self.llm_max_calls}
+        scan_llm_cache = {}
+
+        if not cancelled:
+            findings += self._checklist_checks(
+                files, checklist_items,
+                llm_budget=llm_budget, scan_cache=scan_llm_cache, should_cancel=should_cancel,
+            )
+            if should_cancel and should_cancel():
+                cancelled = True
+
+        if not cancelled:
+            findings += self._wrong_period(
+                files, expected_period,
+                llm_budget=llm_budget, scan_cache=scan_llm_cache, should_cancel=should_cancel,
+            )
+            if should_cancel and should_cancel():
+                cancelled = True
+
         findings += self._unreadable(files)
 
         counts = {c: 0 for c in CATEGORIES}
@@ -205,31 +247,37 @@ class ScanEngine:
             comparisons += 1
             sim = similarity(a["text"], b["text"])
             if sim >= SIMILARITY_THRESHOLD:
-                conf = int(round(sim * 100))
+                pct = int(round(sim * 100))
                 out.append({
                     "category": "possible_duplicate",
-                    "title": f"\"{a['name']}\" looks similar to \"{b['name']}\"",
-                    "confidence": conf, "confidence_level": _level(conf),
+                    "title": f"\"{a['name']}\" and \"{b['name']}\" are {pct}% similar",
+                    "confidence": pct, "confidence_level": _level(pct),
                     "files": [_file_view(a), _file_view(b)],
-                    "evidence": {"summary": f"Document contents are {conf}% similar but the files are not identical.", "similarity": conf},
+                    "evidence": {
+                        "summary": f"Text similarity is {pct}% (exceeds {int(SIMILARITY_THRESHOLD*100)}% threshold).",
+                        "similarity_score": round(sim, 3),
+                    },
                 })
         return out
 
-    def _lsh_candidate_pairs(self, textual):
-        """Return an iterable of (a, b) candidate pairs via MinHash LSH, or None."""
+    def _lsh_candidate_pairs(self, files):
         try:
             from datasketch import MinHash, MinHashLSH
-        except Exception:  # noqa: BLE001
+        except ImportError:
             return None
+
         lsh = MinHashLSH(threshold=LSH_THRESHOLD, num_perm=LSH_NUM_PERM)
         store = {}
-        for f in textual:
+        for f in files:
+            toks = token_set(f["text"])
+            if not toks:
+                continue
             m = MinHash(num_perm=LSH_NUM_PERM)
-            for tok in token_set(f["text"]):
-                m.update(tok.encode("utf-8"))
-            key = str(f["id"])
-            lsh.insert(key, m)
-            store[key] = (f, m)
+            for t in toks:
+                m.update(t.encode("utf8"))
+            lsh.insert(f["id"], m)
+            store[f["id"]] = (f, m)
+
         pairs = []
         seen = set()
         for key, (f, m) in store.items():
@@ -247,10 +295,106 @@ class ScanEngine:
                     break
         return pairs
 
-    def _checklist_checks(self, files, checklist_items):
+    def _checklist_checks(self, files, checklist_items, llm_budget=None, scan_cache=None, should_cancel=None):
         out = []
-        for item in (checklist_items or []):
+        if not checklist_items:
+            return out
+
+        if llm_budget is None:
+            llm_budget = {"calls_made": 0, "max_calls": self.llm_max_calls}
+        if scan_cache is None:
+            scan_cache = {}
+
+        # 1. Deterministic keyword and alias matching
+        matched_map = {}
+        assigned_file_ids = set()
+        for item in checklist_items:
             matched = [f for f in files if match_item(item, f.get("norm_name", ""), f.get("text", ""))]
+            matched_map[item["name"]] = matched
+            for f in matched:
+                assigned_file_ids.add(f["id"])
+
+        # 2. Hard classification via LLM for items missing deterministic matches
+        unmatched_items = [it for it in checklist_items if not matched_map.get(it["name"])]
+        if unmatched_items and self.llm and getattr(self.llm, "available", False):
+            # Sort candidates deterministically by file id
+            unassigned_files = [
+                f for f in files
+                if f["id"] not in assigned_file_ids
+                and f.get("status") == STATUS_OK
+                and f.get("text")
+            ]
+            unassigned_files.sort(key=lambda x: str(x.get("id", "")))
+
+            for f in unassigned_files:
+                if should_cancel and should_cancel():
+                    break
+                if llm_budget["calls_made"] >= llm_budget["max_calls"]:
+                    break
+
+                f_ext = f["ext"].upper()
+                # Only test against unmatched items that allow this file's extension
+                viable_items = [
+                    it for it in unmatched_items
+                    if not it.get("allowed_types") or f_ext in [t.upper() for t in it.get("allowed_types", [])]
+                ]
+                if not viable_items:
+                    continue
+
+                candidate_types = [it["name"] for it in viable_items]
+                file_hash = f.get("sha256") or hashlib.sha256(f["text"].encode("utf-8")).hexdigest()
+                cache_key = ("classify", file_hash, tuple(sorted(candidate_types)))
+
+                if cache_key in scan_cache:
+                    cls_res = scan_cache[cache_key]
+                else:
+                    if should_cancel and should_cancel():
+                        break
+                    if llm_budget["calls_made"] >= llm_budget["max_calls"]:
+                        break
+                    llm_budget["calls_made"] += 1
+                    try:
+                        cls_res = self.llm.classify_document(f["text"], candidate_types)
+                        scan_cache[cache_key] = cls_res
+                    except Exception as e:
+                        logger.warning("LLM classification skipped on error for file %s: %s", f.get("id"), str(e))
+                        cls_res = None
+
+                label = None
+                conf = 0.0
+                reasoning = ""
+                if isinstance(cls_res, dict):
+                    label = cls_res.get("label") or cls_res.get("classification")
+                    try:
+                        conf = float(cls_res.get("confidence", 0.0))
+                    except (ValueError, TypeError):
+                        conf = 0.0
+                    reasoning = str(cls_res.get("reasoning") or "")
+                elif isinstance(cls_res, str):
+                    label = str(cls_res)
+                    conf = float(getattr(cls_res, "confidence", 1.0))
+                    reasoning = str(getattr(cls_res, "reasoning", ""))
+
+                if label and conf >= self.llm_min_confidence:
+                    target_item = next(
+                        (it for it in viable_items if it["name"].lower() == label.strip().lower()),
+                        None,
+                    )
+                    if target_item:
+                        matched_map.setdefault(target_item["name"], []).append(f)
+                        assigned_file_ids.add(f["id"])
+                        f["classified_by"] = "llm"
+                        f["classification"] = target_item["name"]
+                        f["llm_confidence"] = conf
+                        f["llm_reasoning"] = reasoning
+                        if target_item in unmatched_items:
+                            unmatched_items.remove(target_item)
+                        if not unmatched_items:
+                            break
+
+        # 3. Compile checklist findings
+        for item in checklist_items:
+            matched = matched_map.get(item["name"], [])
             if not matched:
                 out.append({
                     "category": "missing_doc",
@@ -266,35 +410,97 @@ class ScanEngine:
             if allowed:
                 for f in matched:
                     if f["ext"].upper() not in allowed:
+                        evidence = {
+                            "summary": f"Matched checklist item \"{item['name']}\" expects {', '.join(allowed)} but file is .{f['ext'].upper()}.",
+                            "expected_types": allowed, "actual_type": f["ext"].upper(), "checklist_item": item["name"],
+                        }
                         out.append({
                             "category": "wrong_type",
                             "title": f"\"{f['name']}\" may be the wrong file type for {item['name']}",
                             "confidence": 70, "confidence_level": "medium",
                             "files": [_file_view(f)],
-                            "evidence": {
-                                "summary": f"Matched checklist item \"{item['name']}\" expects {', '.join(allowed)} but file is .{f['ext'].upper()}.",
-                                "expected_types": allowed, "actual_type": f["ext"].upper(), "checklist_item": item["name"],
-                            },
+                            "evidence": evidence,
                         })
         return out
 
-    def _wrong_period(self, files, expected_period):
+    def _wrong_period(self, files, expected_period, llm_budget=None, scan_cache=None, should_cancel=None):
         out = []
         if not expected_period:
             return out
-        for f in files:
+
+        if llm_budget is None:
+            llm_budget = {"calls_made": 0, "max_calls": self.llm_max_calls}
+        if scan_cache is None:
+            scan_cache = {}
+
+        # Sort candidate files deterministically by file id
+        period_candidates = [
+            f for f in files
+            if (f.get("period") or {}).get("year") is None
+            and f.get("status") == STATUS_OK
+            and f.get("text")
+        ]
+        period_candidates.sort(key=lambda x: str(x.get("id", "")))
+
+        for f in period_candidates:
+            if not self.llm or not getattr(self.llm, "available", False):
+                break
+            if should_cancel and should_cancel():
+                break
+            if llm_budget["calls_made"] >= llm_budget["max_calls"]:
+                break
+
+            file_hash = f.get("sha256") or hashlib.sha256(f["text"].encode("utf-8")).hexdigest()
+            cache_key = ("extract_field", file_hash, "tax_year")
+
+            if cache_key in scan_cache:
+                raw_yr = scan_cache[cache_key]
+            else:
+                if should_cancel and should_cancel():
+                    break
+                if llm_budget["calls_made"] >= llm_budget["max_calls"]:
+                    break
+                llm_budget["calls_made"] += 1
+                try:
+                    raw_yr = self.llm.extract_field(f["text"], "tax_year")
+                    scan_cache[cache_key] = raw_yr
+                except Exception as e:
+                    logger.warning("LLM period extraction skipped on error for file %s: %s", f.get("id"), str(e))
+                    raw_yr = None
+
+            if raw_yr:
+                m = re.search(r"\b(19|20)\d{2}\b", str(raw_yr))
+                if m:
+                    yr = int(m.group(0))
+                    f.setdefault("period", {})["year"] = yr
+                    f["period"]["detected_by"] = "llm"
+
+        sorted_files = sorted(files, key=lambda x: str(x.get("id", "")))
+        for f in sorted_files:
             yr = (f.get("period") or {}).get("year")
             if yr and int(yr) != int(expected_period):
-                out.append({
+                evidence = {
+                    "summary": f"Detected period {yr} does not match the expected period {expected_period}.",
+                    "detected_year": yr, "expected_year": int(expected_period),
+                }
+                detected_by_llm = (f.get("period") or {}).get("detected_by") == "llm"
+                classified_by_llm = f.get("classified_by") == "llm"
+                if detected_by_llm:
+                    evidence["detected_by"] = "llm"
+                if classified_by_llm:
+                    evidence["classified_by"] = "llm"
+
+                finding = {
                     "category": "wrong_period",
                     "title": f"\"{f['name']}\" appears to be from {yr}, not {expected_period}",
                     "confidence": 75, "confidence_level": "medium",
                     "files": [_file_view(f)],
-                    "evidence": {
-                        "summary": f"Detected period {yr} does not match the expected period {expected_period}.",
-                        "detected_year": yr, "expected_year": int(expected_period),
-                    },
-                })
+                    "evidence": evidence,
+                }
+                if detected_by_llm or classified_by_llm:
+                    finding["ai_assisted"] = True
+                    finding["provenance"] = "llm"
+                out.append(finding)
         return out
 
     def _unreadable(self, files):
@@ -312,10 +518,12 @@ class ScanEngine:
         return out
 
 
-def build_default_engine(ocr_provider=None, llm_provider=None) -> ScanEngine:
+def build_default_engine(ocr_provider=None, llm_provider=None, llm_max_calls=None, llm_min_confidence=None) -> ScanEngine:
     """Default engine: text extraction with modular Baidu Unlimited-OCR and Claude Opus (fal.ai)."""
     from .providers import DefaultDocumentExtractor, BaiduUnlimitedOCRProvider, ClaudeOpusFalProvider
     ocr = ocr_provider or BaiduUnlimitedOCRProvider()
     llm = llm_provider or ClaudeOpusFalProvider()
-    return ScanEngine(DefaultDocumentExtractor(ocr), ocr, llm)
-
+    return ScanEngine(
+        DefaultDocumentExtractor(ocr), ocr, llm,
+        llm_max_calls=llm_max_calls, llm_min_confidence=llm_min_confidence,
+    )

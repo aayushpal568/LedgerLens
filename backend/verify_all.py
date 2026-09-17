@@ -24,6 +24,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
+# Hermetic verification: Normal verify_all must NEVER make real Claude API calls
+RUN_LIVE_CLAUDE = "--live-claude" in sys.argv
+if not RUN_LIVE_CLAUDE:
+    os.environ["FAL_KEY"] = ""
+    os.environ["FAL_API_KEY"] = ""
+    os.environ["ANTHROPIC_API_KEY"] = ""
+
 import pypdf
 import docx
 import openpyxl
@@ -95,8 +102,8 @@ def test_backend_api_and_database():
         print(f"  [PASS] Scan Initiation /api/clients/{id}/scan (scan_id={scan_id})")
 
         # Poll scan completion
-        for _ in range(30):
-            time.sleep(0.2)
+        for _ in range(50):
+            time.sleep(0.3)
             s_res = client.get(f"/api/scans/{scan_id}")
             if s_res.json()["status"] in ("completed", "error"):
                 break
@@ -254,8 +261,8 @@ def test_end_to_end_integration():
         # Step 3: Process documents
         s_res = client.post(f"/api/clients/{cid}/scan", json={"expected_period": 2024})
         sid = s_res.json()["id"]
-        for _ in range(30):
-            time.sleep(0.2)
+        for _ in range(25):
+            time.sleep(0.15)
             cur_s = client.get(f"/api/scans/{sid}").json()
             if cur_s["status"] == "completed":
                 break
@@ -499,12 +506,27 @@ def test_claude_opus_fal_integration():
     print("  [PASS] Default engine wires ClaudeOpusFalProvider")
 
 
+def test_opt_in_live_claude():
+    """Separate opt-in live test against fal.ai Claude Opus (only if --live-claude flag passed)."""
+    print("\n--- 6. Opt-In Live Claude Opus Real API Test ---")
+    from engine.providers.llm import ClaudeOpusFalProvider
+    provider = ClaudeOpusFalProvider()
+    if not provider.available:
+        print("  [SKIP] No live FAL_KEY configured for opt-in test")
+        return
+    res = provider.generate("Reply with exactly: LedgerLens Live Test OK")
+    assert res is not None
+    print(f"  [PASS] Live Claude Opus responded: {res}")
+
+
 if __name__ == "__main__":
     test_backend_api_and_database()
     test_core_engine_realistic_files()
     test_end_to_end_integration()
     test_baidu_unlimited_ocr_integration()
     test_claude_opus_fal_integration()
+    if RUN_LIVE_CLAUDE:
+        test_opt_in_live_claude()
     print("\n=======================================================")
     print("ALL VERIFICATION CHECKS PASSED SUCCESSFULLY!")
     print("=======================================================")

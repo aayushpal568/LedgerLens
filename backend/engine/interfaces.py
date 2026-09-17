@@ -6,7 +6,7 @@ web build (uploaded files, no OCR/LLM) and a future local Windows build
 change to the detection logic.
 """
 from abc import ABC, abstractmethod
-from typing import Iterable, List, Optional
+from typing import Any, Iterable, List, Optional
 
 from .models import FileRef, ExtractionResult
 
@@ -58,10 +58,10 @@ class OCRProvider(ABC):
 
 
 class LLMProvider(ABC):
-    """Optional local LLM for hard classification/extraction cases only.
+    """LLM provider for ambiguous classification and extraction cases.
 
-    Never used to make decisions and never sends documents to a cloud service.
-    Default is a no-op; a local Ollama/Qwen adapter can be plugged in later.
+    Deterministic processing stays local. Ambiguous cases may send document text
+    to the configured external LLM provider (e.g. Claude Opus via fal.ai).
     """
 
     name: str = "base"
@@ -72,7 +72,7 @@ class LLMProvider(ABC):
         ...
 
     @abstractmethod
-    def classify_document(self, text: str, candidate_types: Iterable[str]) -> Optional[str]:
+    def classify_document(self, text: str, candidate_types: Iterable[str]) -> Optional[Any]:
         ...
 
     @abstractmethod
