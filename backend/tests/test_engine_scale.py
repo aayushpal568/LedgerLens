@@ -8,9 +8,10 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from engine import (  # noqa: E402
-    build_default_engine, build_local_engine, LocalDirectoryFileSource, LocalPathFileSource,
-    PaddleOCRProvider, OllamaLLMProvider, NoOpOCRProvider,
+    build_default_engine, LocalDirectoryFileSource, LocalPathFileSource,
+    NoOpOCRProvider, NoOpLLMProvider,
 )
+
 
 
 def _make_folder(tmp_path, n=150, dups=6, near=6):
@@ -82,25 +83,23 @@ def test_resume_reuses_prior_state(tmp_path):
     assert full["counts"]["exact_duplicate"] >= 1
 
 
-def test_paddle_provider_unavailable_is_safe():
-    p = PaddleOCRProvider()
-    # paddleocr is not installed in this environment -> inactive, returns None
-    if not p.available:
-        assert p.extract("/nonexistent.png", "png") is None
+def test_noop_ocr_provider_safe():
+    p = NoOpOCRProvider()
+    assert p.available is False
+    assert p.extract("/nonexistent.png", "png") is None
 
 
-def test_ollama_provider_fallback_when_no_server():
-    llm = OllamaLLMProvider(host="http://127.0.0.1:59999")  # nothing listening
+def test_noop_llm_provider_safe():
+    llm = NoOpLLMProvider()
     assert llm.available is False
     assert llm.classify_document("some text", ["invoice", "receipt"]) is None
     assert llm.extract_field("some text", "date") is None
 
 
-def test_build_local_engine_uses_available_or_safe_fallback_providers():
-    engine = build_local_engine(enable_ocr=True, enable_llm=True)
+def test_build_default_engine_uses_safe_providers():
+    engine = build_default_engine()
     assert engine.ocr is not None
     assert engine.llm is not None
-    # Dependency availability is environment-specific. The builder must either
-    # keep a usable local provider or replace it with the safe no-op provider.
-    assert isinstance(engine.ocr.available, bool)
-    assert isinstance(engine.llm.available, bool)
+    assert engine.ocr.available is False
+    assert engine.llm.available is False
+

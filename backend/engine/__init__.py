@@ -11,17 +11,18 @@ from .detect import run_detection
 from .checklist import default_templates, SUPPORTED_EXTENSIONS
 from .models import FileRef, ExtractionResult, CATEGORIES
 from .interfaces import FileSource, DocumentExtractor, OCRProvider, LLMProvider
-from .scan_engine import ScanEngine, build_default_engine, build_local_engine
+from .scan_engine import ScanEngine, build_default_engine
 from .providers import (
     LocalPathFileSource, LocalDirectoryFileSource, DefaultDocumentExtractor,
-    NoOpOCRProvider, PaddleOCRProvider, NoOpLLMProvider, OllamaLLMProvider,
+    NoOpOCRProvider, NoOpLLMProvider,
 )
 
 __all__ = [
     "run_detection", "default_templates", "SUPPORTED_EXTENSIONS",
     "FileRef", "ExtractionResult", "CATEGORIES",
     "FileSource", "DocumentExtractor", "OCRProvider", "LLMProvider",
-    "ScanEngine", "build_default_engine", "build_local_engine",
+    "ScanEngine", "build_default_engine",
     "LocalPathFileSource", "LocalDirectoryFileSource", "DefaultDocumentExtractor",
-    "NoOpOCRProvider", "PaddleOCRProvider", "NoOpLLMProvider", "OllamaLLMProvider",
+    "NoOpOCRProvider", "NoOpLLMProvider",
 ]
+

@@ -6,7 +6,7 @@ ScanEngine with explicit adapters. Extra optional kwargs (should_cancel,
 resume_state, max_workers) are accepted for large-folder / desktop use.
 """
 from .models import CATEGORIES  # re-exported for compatibility
-from .scan_engine import build_default_engine, build_local_engine, ScanEngine  # noqa: F401
+from .scan_engine import build_default_engine, ScanEngine  # noqa: F401
 
 __all__ = ["run_detection", "CATEGORIES"]
 

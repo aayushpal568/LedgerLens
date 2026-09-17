@@ -13,12 +13,10 @@ from pydantic import BaseModel, Field, ConfigDict
 from starlette.middleware.cors import CORSMiddleware
 
 from engine import run_detection, default_templates, SUPPORTED_EXTENSIONS
-from engine import build_local_engine, LocalDirectoryFileSource, PaddleOCRProvider, OllamaLLMProvider
 from engine import report as report_engine
 import storage
 
 ROOT_DIR = Path(__file__).resolve().parent
-BACKEND_TOKEN = os.environ.get("LEDGERLENS_BACKEND_TOKEN", "")
 
 try:
     from dotenv import load_dotenv
@@ -26,39 +24,24 @@ try:
 except Exception:
     pass
 
-# Data backend: "sqlite" (default for local desktop/Tauri) or "mongo" (cloud).
-DATA_BACKEND = os.environ.get("DATA_BACKEND", "sqlite").lower()
-if DATA_BACKEND == "sqlite":
-    from sqlite_store import SqliteDatabase
+# Production Data Backend: PostgreSQL (configurable via DATABASE_URL)
+DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/ledgerlens")
+DATA_BACKEND = os.environ.get("DATA_BACKEND", "postgres").lower()
 
-    def _default_sqlite_path() -> str:
-        """Keep desktop data outside PyInstaller's temporary extraction folder."""
-        local_app_data = os.environ.get("LOCALAPPDATA")
-        if local_app_data:
-            data_dir = Path(local_app_data) / "LedgerLens"
-            data_dir.mkdir(parents=True, exist_ok=True)
-            return str(data_dir / "ledgerlens.db")
-        return str(ROOT_DIR / "ledgerlens.db")
-
-    client = None
-    db = SqliteDatabase(os.environ.get("SQLITE_PATH", _default_sqlite_path()))
-else:
+if DATA_BACKEND == "mongo":
     from motor.motor_asyncio import AsyncIOMotorClient
     mongo_url = os.environ.get("MONGO_URL", "mongodb://127.0.0.1:27017")
     client = AsyncIOMotorClient(mongo_url)
     db = client[os.environ.get("DB_NAME", "ledgerlens")]
+else:
+    # PostgreSQL / Cloud Database layer
+    from database import get_database
+    client = None
+    db = get_database(DATABASE_URL)
 
-app = FastAPI()
+app = FastAPI(title="LedgerLens Cloud Accounting AI API")
 api_router = APIRouter(prefix="/api")
 
-
-@app.middleware("http")
-async def require_desktop_token(request: Request, call_next):
-    """Authenticate localhost API traffic when launched by the desktop shell."""
-    if BACKEND_TOKEN and request.url.path.startswith("/api"):
-        if request.headers.get("x-ledgerlens-token") != BACKEND_TOKEN:
-            return JSONResponse(status_code=403, content={"detail": "Invalid LedgerLens backend token"})
-    return await call_next(request)
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -115,13 +98,6 @@ class ScanBody(BaseModel):
     expected_period: Optional[int] = None
 
 
-class ScanLocalBody(BaseModel):
-    folder_path: str
-    template_id: Optional[str] = None
-    expected_period: Optional[int] = None
-    resume_scan_id: Optional[str] = None
-
-
 class FindingUpdate(BaseModel):
     status: Optional[str] = Field(default=None, pattern="^(unreviewed|keep|keep_both|ignore|review_later)$")
     note: Optional[str] = Field(default=None, max_length=10000)
@@ -136,8 +112,8 @@ async def get_firm():
             "id": "firm",
             "name": "",
             "contact_email": "",
-            "retention_note": "Documents stay on this device. No files are uploaded to any external server.",
-            "settings": {"privacy_mode": True, "warn_network_drives": True},
+            "retention_note": "Documents are securely processed in isolated cloud environments.",
+            "settings": {"privacy_mode": True},
             "created_at": now_iso(),
         }
         await db.firm.insert_one(dict(doc))
@@ -151,354 +127,6 @@ async def update_firm(body: FirmUpdate):
     await db.firm.update_one({"id": "firm"}, {"$set": update}, upsert=True)
     doc = await db.firm.find_one({"id": "firm"})
     return clean(doc)
-
-
-# -------------------------- system check ---------------------------
-@api_router.get("/system-check")
-async def get_system_check():
-    import shutil
-    import psutil
-    import requests
-    import sqlite3
-
-    checks = []
-
-    # 1. LedgerLens desktop app
-    checks.append({
-        "id": "app",
-        "name": "LedgerLens App",
-        "status": "PASS",
-        "explanation": "Desktop shell is running in local mode (v1.0.0)."
-    })
-
-    # 2. Python Backend
-    checks.append({
-        "id": "backend",
-        "name": "Backend API",
-        "status": "PASS",
-        "explanation": f"FastAPI backend sidecar is alive and listening on port {os.environ.get('PORT', '8001')}."
-    })
-
-    # 3. SQLite Storage
-    sqlite_ok = False
-    sqlite_err = ""
-    try:
-        c = await db.firm.find_one({"id": "firm"})
-        if not c:
-            await db.firm.insert_one({
-                "id": "firm",
-                "name": "",
-                "contact_email": "",
-                "retention_note": "Documents stay on this device. No files are uploaded to any external server.",
-                "settings": {"privacy_mode": True, "warn_network_drives": True},
-                "created_at": now_iso(),
-            })
-            c = await db.firm.find_one({"id": "firm"})
-        sqlite_ok = c is not None
-    except Exception as e:
-        sqlite_err = str(e)
-
-    checks.append({
-        "id": "sqlite",
-        "name": "SQLite Database",
-        "status": "PASS" if sqlite_ok else "FAILED",
-        "explanation": "Local SQLite database is initialized and responding." if sqlite_ok else f"SQLite error: {sqlite_err}"
-    })
-
-    # 4. OCR Engine & Dependencies
-    ocr_provider = PaddleOCRProvider()
-    ocr_available = ocr_provider.available
-    checks.append({
-        "id": "ocr_engine",
-        "name": "OCR Engine (PaddleOCR)",
-        "status": "PASS" if ocr_available else "WARNING",
-        "explanation": "PaddleOCR framework and model runtime are ready (CPU-accelerated)." if ocr_available else "PaddleOCR is not available on this machine (scanned image OCR will be skipped safely)."
-    })
-
-    pymupdf_available = False
-    try:
-        import importlib.util
-        pymupdf_available = importlib.util.find_spec("pymupdf") is not None
-    except Exception:
-        pass
-
-    checks.append({
-        "id": "ocr_deps",
-        "name": "OCR PDF Dependencies (PyMuPDF)",
-        "status": "PASS" if pymupdf_available else "WARNING",
-        "explanation": "PyMuPDF rasterizer is available for image-only PDF extraction." if pymupdf_available else "PyMuPDF not installed (PDF page rasterization unavailable)."
-    })
-
-    # 5. Ollama Runtime
-    ollama_provider = OllamaLLMProvider()
-    ollama_up = ollama_provider.available
-    checks.append({
-        "id": "ollama",
-        "name": "Ollama Local Runtime",
-        "status": "PASS" if ollama_up else "WARNING",
-        "explanation": "Ollama local service is connected on http://127.0.0.1:11434." if ollama_up else "Ollama service is not running or starting up."
-    })
-
-    # 6. Qwen Model
-    qwen_found = False
-    if ollama_up:
-        try:
-            r = requests.get("http://127.0.0.1:11434/api/tags", timeout=2)
-            if r.status_code == 200:
-                tags = r.json() or {}
-                models = [m.get("name", "") for m in tags.get("models", [])]
-                qwen_found = any("qwen" in m.lower() for m in models)
-        except Exception:
-            pass
-
-    checks.append({
-        "id": "qwen",
-        "name": "Qwen Language Model (qwen2:0.5b)",
-        "status": "PASS" if qwen_found else ("WARNING" if ollama_up else "WARNING"),
-        "explanation": "Exact model 'qwen2:0.5b' is installed locally." if qwen_found else "qwen2:0.5b model is not currently installed or Ollama is offline."
-    })
-
-    # 7. Local API Connection
-    checks.append({
-        "id": "api_conn",
-        "name": "Local API Connection",
-        "status": "PASS",
-        "explanation": "Frontend connects exclusively to 127.0.0.1 (zero public exposition)."
-    })
-
-    # 8. Required Disk Space
-    usage = shutil.disk_usage(str(ROOT_DIR))
-    free_gb = round(usage.free / (1024 ** 3), 1)
-    disk_status = "PASS" if free_gb >= 2.0 else ("WARNING" if free_gb >= 0.5 else "FAILED")
-    checks.append({
-        "id": "disk",
-        "name": "Required Disk Space",
-        "status": disk_status,
-        "explanation": f"{free_gb} GB free on current drive (minimum 2.0 GB recommended)."
-    })
-
-    # 9. Available RAM
-    mem = psutil.virtual_memory()
-    total_ram_gb = round(mem.total / (1024 ** 3), 1)
-    avail_ram_gb = round(mem.available / (1024 ** 3), 1)
-    ram_status = "PASS" if total_ram_gb >= 4.0 else "WARNING"
-    checks.append({
-        "id": "ram",
-        "name": "System RAM",
-        "status": ram_status,
-        "explanation": f"{avail_ram_gb} GB available of {total_ram_gb} GB total."
-    })
-
-    # 10. GPU / CPU Capability
-    cpu_cores = psutil.cpu_count(logical=True)
-    gpu_desc = "CPU-only mode (multi-threaded fallback supported)"
-    try:
-        import subprocess
-        smi = subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"], capture_output=True, text=True, timeout=1)
-        if smi.returncode == 0 and smi.stdout.strip():
-            gpu_desc = f"NVIDIA GPU detected: {smi.stdout.strip()} (Hardware acceleration enabled)"
-    except Exception:
-        pass
-
-    checks.append({
-        "id": "hardware",
-        "name": "Compute Capability (CPU / GPU)",
-        "status": "PASS",
-        "explanation": f"{cpu_cores} logical CPU cores detected. {gpu_desc}."
-    })
-
-    # 11. Folders & Permissions
-    app_dir_writable = os.access(str(ROOT_DIR), os.W_OK)
-    checks.append({
-        "id": "permissions",
-        "name": "Folder Permissions",
-        "status": "PASS" if app_dir_writable else "WARNING",
-        "explanation": "Local application data directory is fully writable for SQLite and temporary files." if app_dir_writable else "Application directory has restricted write permissions."
-    })
-
-    # 12. Offline / Local-only configuration
-    checks.append({
-        "id": "offline",
-        "name": "Offline & Local Privacy",
-        "status": "PASS",
-        "explanation": "Zero cloud document egress. All hashing, OCR, classification and database storage are 100% on-device."
-    })
-
-    return {"checks": checks, "timestamp": now_iso()}
-
-
-@api_router.post("/system-test")
-async def run_full_system_test():
-    """Runs a live verification of OCR on a synthetic image and Ollama/Qwen on a synthetic prompt."""
-    from PIL import Image, ImageDraw
-
-    ocr_result = {"status": "SKIPPED", "message": "OCR provider not available"}
-    qwen_result = {"status": "SKIPPED", "message": "Ollama/Qwen not available"}
-
-    # Test OCR
-    ocr_provider = PaddleOCRProvider()
-    if ocr_provider.available:
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-            tmp_path = tmp.name
-        try:
-            img = Image.new("RGB", (320, 80), color=(255, 255, 255))
-            draw = ImageDraw.Draw(img)
-            draw.text((15, 25), "SYNTHETIC INVOICE 2024", fill=(0, 0, 0))
-            img.save(tmp_path)
-
-            extracted = await asyncio.to_thread(ocr_provider.extract, tmp_path, "png")
-            if extracted and "INVOICE" in extracted.upper():
-                ocr_result = {"status": "PASS", "message": f"Successfully extracted text from image: '{extracted.strip()}'"}
-            elif extracted:
-                ocr_result = {"status": "PASS", "message": f"OCR executed: '{extracted.strip()}'"}
-            else:
-                ocr_result = {"status": "WARNING", "message": "OCR ran but returned empty text."}
-        except Exception as e:
-            ocr_result = {"status": "FAILED", "message": f"OCR execution error: {e}"}
-        finally:
-            if os.path.exists(tmp_path):
-                try:
-                    os.unlink(tmp_path)
-                except Exception:
-                    pass
-
-    # Test Ollama / Qwen
-    ollama_provider = OllamaLLMProvider()
-    if ollama_provider.available:
-        try:
-            res = await asyncio.to_thread(
-                ollama_provider._generate,
-                "What is 2+2? Reply with only the number."
-            )
-            if res and "4" in res:
-                qwen_result = {"status": "PASS", "message": f"Local model responded: '{res.strip()}'"}
-            elif res:
-                qwen_result = {"status": "PASS", "message": f"Local model generated: '{res.strip()}'"}
-            else:
-                qwen_result = {"status": "WARNING", "message": "Model connection established but no completion generated."}
-        except Exception as e:
-            qwen_result = {"status": "FAILED", "message": f"Model inference error: {e}"}
-
-    return {
-        "ocr": ocr_result,
-        "qwen": qwen_result,
-        "timestamp": now_iso()
-    }
-
-
-# -------------------------- automated setup ------------------------
-SETUP_STATUS = {
-    "in_progress": False,
-    "step": "idle",
-    "message": "",
-    "error": None,
-    "percent": 0,
-}
-
-@api_router.get("/setup/status")
-async def get_setup_status():
-    return SETUP_STATUS
-
-
-@api_router.post("/setup/ollama-qwen")
-async def setup_ollama_qwen():
-    """Automatically installs Ollama and downloads qwen2:0.5b model locally."""
-    global SETUP_STATUS
-    if SETUP_STATUS["in_progress"]:
-        return SETUP_STATUS
-
-    SETUP_STATUS = {
-        "in_progress": True,
-        "step": "checking",
-        "message": "Checking local AI runtime...",
-        "error": None,
-        "percent": 10,
-    }
-
-    async def _do_setup():
-        global SETUP_STATUS
-        import subprocess
-        import requests
-        try:
-            local_appdata = os.environ.get("LOCALAPPDATA", "")
-            ollama_exe = os.path.join(local_appdata, "Programs", "Ollama", "ollama.exe")
-
-            # Step 1: Detect/Install Ollama
-            if not os.path.exists(ollama_exe):
-                SETUP_STATUS["step"] = "installing_ollama"
-                SETUP_STATUS["message"] = "Downloading & installing Ollama local runtime via winget..."
-                SETUP_STATUS["percent"] = 25
-                cmd = ["winget", "install", "-e", "--id", "Ollama.Ollama", "--accept-source-agreements", "--accept-package-agreements", "--silent"]
-                proc = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True)
-                if not os.path.exists(ollama_exe):
-                    SETUP_STATUS["error"] = f"Failed to install Ollama automatically. Exit code: {proc.returncode}. {proc.stderr[:200]}"
-                    SETUP_STATUS["in_progress"] = False
-                    return
-
-            # Step 2: Ensure Ollama is running
-            SETUP_STATUS["step"] = "starting_ollama"
-            SETUP_STATUS["message"] = "Starting local Ollama service on 127.0.0.1:11434..."
-            SETUP_STATUS["percent"] = 50
-
-            # Ping tags
-            is_running = False
-            for _ in range(3):
-                try:
-                    r = requests.get("http://127.0.0.1:11434/api/tags", timeout=2)
-                    if r.status_code == 200:
-                        is_running = True
-                        break
-                except Exception:
-                    pass
-                if not is_running:
-                    # Launch serve
-                    env = os.environ.copy()
-                    env["OLLAMA_HOST"] = "127.0.0.1:11434"
-                    env["OLLAMA_VULKAN"] = "false"
-                    env["CUDA_VISIBLE_DEVICES"] = "-1"
-                    env["GGML_VK_VISIBLE_DEVICES"] = "-1"
-                    flags = 0
-                    if sys.platform == "win32":
-                        flags = 0x08000000  # CREATE_NO_WINDOW
-                    subprocess.Popen([ollama_exe, "serve"], env=env, creationflags=flags)
-                    await asyncio.sleep(2)
-
-            # Step 3: Check/Pull qwen2:0.5b
-            SETUP_STATUS["step"] = "checking_model"
-            SETUP_STATUS["message"] = "Checking local qwen2:0.5b model..."
-            SETUP_STATUS["percent"] = 70
-
-            has_qwen = False
-            try:
-                r = requests.get("http://127.0.0.1:11434/api/tags", timeout=2)
-                if r.status_code == 200:
-                    models = [m.get("name", "") for m in r.json().get("models", [])]
-                    has_qwen = any("qwen2:0.5b" in m.lower() for m in models)
-            except Exception:
-                pass
-
-            if not has_qwen:
-                SETUP_STATUS["step"] = "pulling_model"
-                SETUP_STATUS["message"] = "Downloading qwen2:0.5b model (~350MB) locally..."
-                SETUP_STATUS["percent"] = 80
-                # Trigger pull via Ollama API (non-blocking stream)
-                r = requests.post("http://127.0.0.1:11434/api/pull", json={"name": "qwen2:0.5b", "stream": False}, timeout=300)
-                if r.status_code != 200:
-                    SETUP_STATUS["error"] = f"Failed to pull model: {r.text}"
-                    SETUP_STATUS["in_progress"] = False
-                    return
-
-            SETUP_STATUS["step"] = "completed"
-            SETUP_STATUS["message"] = "Local AI & OCR setup complete! Everything is running 100% locally."
-            SETUP_STATUS["percent"] = 100
-            SETUP_STATUS["in_progress"] = False
-
-        except Exception as e:
-            SETUP_STATUS["error"] = str(e)
-            SETUP_STATUS["in_progress"] = False
-
-    asyncio.create_task(_do_setup())
-    return SETUP_STATUS
 
 
 # ---------------------------- clients ------------------------------
@@ -556,8 +184,6 @@ async def list_files(client_id: str):
 
 @api_router.post("/clients/{client_id}/files")
 async def upload_files(client_id: str, files: List[UploadFile] = File(...)):
-    if DATA_BACKEND == "sqlite":
-        raise HTTPException(400, "File uploads are unavailable in local mode; use Scan a Local Folder so documents stay on this device")
     if not await db.clients.find_one({"id": client_id}):
         raise HTTPException(404, "Client not found")
     saved = []
@@ -722,41 +348,6 @@ async def _run_scan(scan_id: str, client_id: str, template_id: Optional[str], ex
         _shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-async def _run_local_scan(scan_id: str, client_id: str, folder_path: str,
-                          template_id: Optional[str], expected_period: Optional[int],
-                          resume_scan_id: Optional[str] = None):
-    """Local desktop build: scan a real folder in place via LocalDirectoryFileSource.
-
-    No files are copied or uploaded. Reads directly from the user's disk. OCR/LLM
-    are activated only if available locally (build_local_engine falls back to
-    no-op otherwise).
-    """
-    try:
-        items = await _load_items(template_id)
-        source = LocalDirectoryFileSource(folder_path, supported_only=True)
-        engine = build_local_engine(enable_ocr=True, enable_llm=False)
-
-        resume_state = None
-        if resume_scan_id:
-            prior_scan = await db.scans.find_one({"id": resume_scan_id})
-            if prior_scan and "file_states" in prior_scan:
-                resume_state = prior_scan["file_states"]
-
-        await db.scans.update_one({"id": scan_id}, {"$set": {"status": "scanning", "progress": 0}})
-        on_progress = _make_progress(scan_id, asyncio.get_event_loop())
-        result = await asyncio.to_thread(
-            engine.run, source, items, expected_period, on_progress,
-            lambda: scan_id in CANCEL_REQUESTS,
-            resume_state=resume_state,
-        )
-        await _finalize_scan(scan_id, client_id, result)
-    except Exception as e:  # noqa: BLE001
-        logger.exception("local scan failed")
-        await db.scans.update_one({"id": scan_id}, {"$set": {"status": "error", "error": str(e)}})
-    finally:
-        CANCEL_REQUESTS.discard(scan_id)
-
-
 @api_router.post("/scans/{scan_id}/cancel")
 async def cancel_scan(scan_id: str):
     scan = await db.scans.find_one({"id": scan_id}, {"_id": 0})
@@ -791,48 +382,6 @@ async def start_scan(client_id: str, body: ScanBody):
     }
     await db.scans.insert_one(dict(scan))
     asyncio.create_task(_run_scan(scan["id"], client_id, body.template_id, body.expected_period))
-    return clean(scan)
-
-
-@api_router.post("/clients/{client_id}/scan-local")
-async def start_local_scan(client_id: str, body: ScanLocalBody):
-    """Desktop/local scan: scans a real folder path on this machine in place.
-
-    Used by the Tauri desktop build (folder picker). Requires filesystem access
-    to `folder_path`; no files are uploaded or copied.
-    """
-    c = await db.clients.find_one({"id": client_id})
-    if not c:
-        raise HTTPException(404, "Client not found")
-    if not os.path.isdir(body.folder_path):
-        raise HTTPException(400, "Folder path not found or not a directory")
-    if body.resume_scan_id:
-        prior_scan = await db.scans.find_one({"id": body.resume_scan_id})
-        if not prior_scan:
-            raise HTTPException(404, "Resume scan not found")
-        if prior_scan.get("client_id") != client_id or prior_scan.get("source_type") != "local":
-            raise HTTPException(400, "Resume scan does not belong to this client's local scans")
-        if os.path.normcase(os.path.abspath(prior_scan.get("folder_path", ""))) != os.path.normcase(os.path.abspath(body.folder_path)):
-            raise HTTPException(400, "Resume folder must match the original scan folder")
-    scan = {
-        "id": new_id(),
-        "client_id": client_id,
-        "client_name": c["name"],
-        "template_id": body.template_id,
-        "expected_period": body.expected_period,
-        "source_type": "local",
-        "folder_path": body.folder_path,
-        "status": "queued",
-        "progress": 0,
-        "total_files": 0,
-        "processed_files": 0,
-        "skipped_files": [],
-        "counts": {},
-        "total_findings": 0,
-        "started_at": now_iso(),
-    }
-    await db.scans.insert_one(dict(scan))
-    asyncio.create_task(_run_local_scan(scan["id"], client_id, body.folder_path, body.template_id, body.expected_period, body.resume_scan_id))
     return clean(scan)
 
 
@@ -921,16 +470,18 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def seed_defaults():
-    if DATA_BACKEND != "sqlite":
-        try:
-            storage.init_storage()
-            logger.info("Object storage initialized")
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"Storage init failed: {e}")
+    if hasattr(db, "init_pg"):
+        await db.init_pg()
+    try:
+        storage.init_storage()
+        logger.info("Object storage initialized")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Storage init deferred/unavailable: {e}")
     if await db.templates.count_documents({}) == 0:
         for tpl in default_templates():
             await db.templates.insert_one({"id": new_id(), "created_at": now_iso(), **tpl})
         logger.info("Seeded default checklist templates")
+
 
 
 @app.on_event("shutdown")

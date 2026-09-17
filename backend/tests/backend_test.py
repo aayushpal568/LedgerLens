@@ -201,24 +201,3 @@ def test_cancel_scan_on_live_scan(s, client_id):
     # Either final state acceptable per spec; must not be 'error'
     assert final["status"] in ("completed", "cancelled"), f"Bad terminal status: {final}"
 
-
-
-# ---------------- scan-local endpoint (NEW) ----------------
-def test_scan_local_invalid_folder(s, client_id):
-    tpls = s.get(f"{BASE}/checklist-templates").json()
-    sb = next(t for t in tpls if t["name"] == "Small Business Package")
-    r = s.post(
-        f"{BASE}/clients/{client_id}/scan-local",
-        json={"folder_path": "/no/such/dir", "template_id": sb["id"], "expected_period": 2024},
-    )
-    assert r.status_code == 400, r.text
-
-
-def test_scan_local_unknown_client(s):
-    tpls = s.get(f"{BASE}/checklist-templates").json()
-    sb = next(t for t in tpls if t["name"] == "Small Business Package")
-    r = s.post(
-        f"{BASE}/clients/does-not-exist/scan-local",
-        json={"folder_path": "/tmp", "template_id": sb["id"], "expected_period": 2024},
-    )
-    assert r.status_code == 404

@@ -313,28 +313,8 @@ class ScanEngine:
 
 
 def build_default_engine() -> ScanEngine:
-    """Web build: text extraction only, OCR/LLM disabled (no-op providers)."""
+    """Default engine: text extraction with no-op providers."""
     from .providers import DefaultDocumentExtractor, NoOpOCRProvider, NoOpLLMProvider
     ocr = NoOpOCRProvider()
     return ScanEngine(DefaultDocumentExtractor(ocr), ocr, NoOpLLMProvider())
 
-
-def build_local_engine(enable_ocr: bool = True, enable_llm: bool = False,
-                       ocr_lang: str = "en", ollama_model: str = "qwen2:0.5b") -> ScanEngine:
-    """Local desktop build: activates PaddleOCR / Ollama when available.
-
-    Falls back to no-op providers automatically if the local dependency/server
-    is not present, so this is always safe to call. Real OCR/LLM execution has
-    NOT been validated on Windows yet.
-    """
-    from .providers import (
-        DefaultDocumentExtractor, NoOpOCRProvider, PaddleOCRProvider,
-        NoOpLLMProvider, OllamaLLMProvider,
-    )
-    ocr = PaddleOCRProvider(lang=ocr_lang) if enable_ocr else NoOpOCRProvider()
-    if not ocr.available:
-        ocr = NoOpOCRProvider()
-    llm = OllamaLLMProvider(model=ollama_model) if enable_llm else NoOpLLMProvider()
-    if enable_llm and not llm.available:
-        llm = NoOpLLMProvider()
-    return ScanEngine(DefaultDocumentExtractor(ocr), ocr, llm)

@@ -53,9 +53,10 @@ def test_reports_escape_markup_and_spreadsheet_formulas():
 
 @pytest.fixture
 def api_client(tmp_path, monkeypatch):
-    monkeypatch.setenv("DATA_BACKEND", "sqlite")
-    monkeypatch.setenv("SQLITE_PATH", str(tmp_path / "api.db"))
+    monkeypatch.setenv("DATA_BACKEND", "postgres")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@localhost:5432/test")
     sys.modules.pop("server", None)
+    sys.modules.pop("database", None)
     server = importlib.import_module("server")
     with TestClient(server.app) as client:
         yield client, server
@@ -75,36 +76,3 @@ def test_invalid_review_status_is_rejected(api_client):
     response = client.patch("/api/findings/finding-1", json={"status": "delete_files"})
     assert response.status_code == 422
 
-
-def test_local_mode_upload_cannot_egress(api_client, monkeypatch):
-    client, server = api_client
-    called = {"value": False}
-
-    def forbidden_upload(*_args, **_kwargs):
-        called["value"] = True
-        raise AssertionError("external storage must not be called in local mode")
-
-    monkeypatch.setattr(server.storage, "put_object", forbidden_upload)
-    response = client.post(
-        "/api/clients/client-1/files",
-        files={"files": ("synthetic.csv", b"date,amount\n2024-01-01,1\n", "text/csv")},
-    )
-    assert response.status_code == 400
-    assert called["value"] is False
-
-
-def test_resume_rejects_scan_from_another_client(api_client, tmp_path):
-    client, server = api_client
-    import asyncio
-    asyncio.run(server.db.clients.insert_one({"id": "client-a", "name": "A"}))
-    asyncio.run(server.db.clients.insert_one({"id": "client-b", "name": "B"}))
-    asyncio.run(server.db.scans.insert_one({
-        "id": "prior", "client_id": "client-a", "source_type": "local",
-        "folder_path": str(tmp_path), "file_states": {},
-    }))
-
-    response = client.post(
-        "/api/clients/client-b/scan-local",
-        json={"folder_path": str(tmp_path), "resume_scan_id": "prior"},
-    )
-    assert response.status_code == 400
