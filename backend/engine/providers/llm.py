@@ -24,9 +24,17 @@ import httpx
 
 from ..interfaces import LLMProvider
 
+try:
+    from dotenv import load_dotenv
+    _backend_env = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), ".env")
+    if os.path.exists(_backend_env):
+        load_dotenv(_backend_env)
+except Exception:
+    pass
+
 logger = logging.getLogger("ledgerlens.llm")
 
-DEFAULT_FAL_ENDPOINT = "https://fal.run/fal-ai/any-llm"
+DEFAULT_FAL_ENDPOINT = "https://fal.run/openrouter/router/openai/v1"
 DEFAULT_CLAUDE_MODEL = "anthropic/claude-3-opus"
 DEFAULT_ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages"
 DEFAULT_ANTHROPIC_MODEL = "claude-3-opus-20240229"
@@ -195,30 +203,48 @@ class ClaudeOpusFalProvider(LLMProvider):
         system_prompt: Optional[str] = None,
         temperature: float = 0.0,
     ) -> Optional[str]:
-        """Invoke fal.ai Any-LLM inference endpoint."""
+        """Invoke fal.ai inference endpoint (supports OpenRouter OpenAI-compatible and Any-LLM)."""
+        is_openai_compat = ("openai" in self._endpoint) or ("openrouter" in self._endpoint) or ("chat/completions" in self._endpoint)
+        target_url = self._endpoint
+        if is_openai_compat and not target_url.endswith("/chat/completions"):
+            target_url = f"{target_url}/chat/completions"
+
         headers = {
             "Authorization": f"Key {self._fal_key}",
             "Content-Type": "application/json",
         }
-        payload: Dict[str, Any] = {
-            "prompt": prompt,
-            "model": self._model,
-            "temperature": temperature,
-            "max_tokens": self._max_tokens,
-            "priority": "latency",
-        }
-        if system_prompt:
-            payload["system_prompt"] = system_prompt
+
+        if is_openai_compat:
+            messages: List[Dict[str, str]] = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": prompt})
+            payload: Dict[str, Any] = {
+                "model": self._model,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": self._max_tokens,
+            }
+        else:
+            payload = {
+                "prompt": prompt,
+                "model": self._model,
+                "temperature": temperature,
+                "max_tokens": self._max_tokens,
+                "priority": "latency",
+            }
+            if system_prompt:
+                payload["system_prompt"] = system_prompt
 
         logger.info(
             "Calling fal.ai Claude Opus endpoint %s with model %s (max_tokens=%d)",
-            self._endpoint, self._model, self._max_tokens,
+            target_url, self._model, self._max_tokens,
         )
 
         try:
             with httpx.Client(timeout=self._timeout) as client:
-                res = client.post(self._endpoint, json=payload, headers=headers)
-                if res.status_code == 401 or res.status_code == 403:
+                res = client.post(target_url, json=payload, headers=headers)
+                if res.status_code in (401, 403):
                     logger.error("fal.ai authentication failed (HTTP %d). Check FAL_KEY.", res.status_code)
                     return None
                 if res.status_code == 429:
@@ -235,11 +261,19 @@ class ClaudeOpusFalProvider(LLMProvider):
                     logger.error("fal.ai error reported in response: %s", data["error"])
                     return None
 
-                output = data.get("output")
+                output = None
+                if is_openai_compat:
+                    choices = data.get("choices") or []
+                    if choices:
+                        msg = choices[0].get("message") or {}
+                        output = msg.get("content")
+                if output is None:
+                    output = data.get("output")
+
                 if output is not None:
                     return str(output).strip()
 
-                logger.warning("fal.ai response did not contain 'output' field: %s", list(data.keys()))
+                logger.warning("fal.ai response did not contain message/output content: %s", list(data.keys()))
                 return None
 
         except httpx.TimeoutException:
