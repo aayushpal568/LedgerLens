@@ -5,6 +5,7 @@ import { Button, Card, Input, Select, Label, Badge, EmptyState, Textarea } from 
 import { CLIENT_TYPES } from "@/lib/utils";
 import { toast } from "sonner";
 import { Users, Plus, Trash2, FolderSearch, ShieldAlert, X, FileStack } from "lucide-react";
+import { TwoStepDeleteDialog } from "@/components/TwoStepDeleteDialog";
 
 function AddClientModal({ onClose, onCreated }) {
   const [form, setForm] = useState({ name: "", client_type: "Small Business", notes: "" });
@@ -57,8 +58,6 @@ function AddClientModal({ onClose, onCreated }) {
   );
 }
 
-import { TwoStepDeleteDialog } from "@/components/TwoStepDeleteDialog";
-
 export default function Clients() {
   const { clients, refreshClients, setActiveClient, setTab, activeClient } = useApp();
   const [showAdd, setShowAdd] = useState(false);
@@ -102,7 +101,7 @@ export default function Clients() {
         </Button>
       </div>
 
-      {clients.length === 0 ? (
+      {(clients || []).length === 0 ? (
         <Card>
           <EmptyState icon={Users} title="No clients yet"
             subtitle="Add your first client to create a document workspace and run a scan."
@@ -110,7 +109,7 @@ export default function Clients() {
         </Card>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {clients.map((c) => (
+          {(clients || []).map((c) => (
             <Card key={c.id} data-testid={`client-card-${c.id}`}
               className="p-5 hover:shadow-md transition-shadow cursor-pointer group"
               onClick={() => openScan(c)}>

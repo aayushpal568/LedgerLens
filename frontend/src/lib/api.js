@@ -4,13 +4,6 @@ const BASE = (process.env.REACT_APP_BACKEND_URL || "http://127.0.0.1:8001").repl
 export const API = `${BASE}/api`;
 
 const http = axios.create({ baseURL: API, timeout: 30000 });
-http.interceptors.request.use(async (config) => {
-  if (typeof window !== "undefined" && window.__TAURI__?.core?.invoke) {
-    const token = await window.__TAURI__.core.invoke("backend_token");
-    config.headers.set("X-LedgerLens-Token", token);
-  }
-  return config;
-});
 
 export const api = {
   getFirm: () => http.get("/firm").then((r) => r.data),
@@ -31,7 +24,6 @@ export const api = {
   deleteTemplate: (id) => http.delete(`/checklist-templates/${id}`).then((r) => r.data),
 
   startScan: (id, body) => http.post(`/clients/${id}/scan`, body).then((r) => r.data),
-  startLocalScan: (id, body) => http.post(`/clients/${id}/scan-local`, body).then((r) => r.data),
   cancelScan: (id) => http.post(`/scans/${id}/cancel`).then((r) => r.data),
   listScans: (id) => http.get(`/clients/${id}/scans`).then((r) => r.data),
   getScan: (id) => http.get(`/scans/${id}`).then((r) => r.data),
@@ -41,8 +33,4 @@ export const api = {
   downloadReport: (scanId, format) => http.get(`/scans/${scanId}/report`, {
     params: { format }, responseType: "arraybuffer",
   }).then((r) => r.data),
-  getSystemCheck: () => http.get("/system-check").then((r) => r.data),
-  runSystemTest: () => http.post("/system-test").then((r) => r.data),
-  getSetupStatus: () => http.get("/setup/status").then((r) => r.data),
-  setupOllamaQwen: () => http.post("/setup/ollama-qwen").then((r) => r.data),
 };

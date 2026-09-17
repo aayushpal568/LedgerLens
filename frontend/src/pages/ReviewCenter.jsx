@@ -36,18 +36,28 @@ export default function ReviewCenter() {
 
   const loadScans = useCallback(async () => {
     if (!activeClient) return;
-    const s = await api.listScans(activeClient.id);
-    setScans(s);
-    const completed = s.filter((x) => x.status === "completed");
-    if (!activeScan && completed.length) setActiveScan(completed[0]);
+    try {
+      const s = await api.listScans(activeClient.id);
+      const list = Array.isArray(s) ? s : [];
+      setScans(list);
+      const completed = list.filter((x) => x.status === "completed");
+      if (!activeScan && completed.length) setActiveScan(completed[0]);
+    } catch {
+      setScans([]);
+    }
   }, [activeClient, activeScan, setActiveScan]);
 
   const loadFindings = useCallback(async () => {
     if (!scanId) { setLoading(false); return; }
     setLoading(true);
-    const data = await api.getFindings(scanId);
-    setFindings(data);
-    setLoading(false);
+    try {
+      const data = await api.getFindings(scanId);
+      setFindings(Array.isArray(data) ? data : []);
+    } catch {
+      setFindings([]);
+    } finally {
+      setLoading(false);
+    }
   }, [scanId]);
 
   useEffect(() => { loadScans(); }, [loadScans]);
@@ -56,16 +66,20 @@ export default function ReviewCenter() {
 
   const counts = useMemo(() => {
     const c = {};
-    CATEGORIES.forEach((cat) => { c[cat.id] = findings.filter((f) => f.category === cat.id).length; });
+    const list = Array.isArray(findings) ? findings : [];
+    CATEGORIES.forEach((cat) => { c[cat.id] = list.filter((f) => f.category === cat.id).length; });
     return c;
   }, [findings]);
 
-  const filtered = useMemo(() => findings.filter((f) => {
-    if (filterCat !== "all" && f.category !== filterCat) return false;
-    if (filterStatus !== "all" && f.status !== filterStatus) return false;
-    if (search && !f.title.toLowerCase().includes(search.toLowerCase())) return false;
-    return true;
-  }), [findings, filterCat, filterStatus, search]);
+  const filtered = useMemo(() => {
+    const list = Array.isArray(findings) ? findings : [];
+    return list.filter((f) => {
+      if (filterCat !== "all" && f.category !== filterCat) return false;
+      if (filterStatus !== "all" && f.status !== filterStatus) return false;
+      if (search && !f.title?.toLowerCase().includes(search.toLowerCase())) return false;
+      return true;
+    });
+  }, [findings, filterCat, filterStatus, search]);
 
   const setStatus = async (finding, status) => {
     const updated = await api.updateFinding(finding.id, { status });

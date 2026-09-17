@@ -2,7 +2,7 @@ import React from "react";
 import { useApp } from "@/context/AppContext";
 import { cn } from "@/lib/utils";
 import {
-  Building2, Users, FolderSearch, FileCheck2, ShieldAlert, Columns2, FileSpreadsheet, Lock, Activity,
+  Building2, Users, FolderSearch, FileCheck2, ShieldAlert, Columns2, FileSpreadsheet, Lock,
 } from "lucide-react";
 
 const NAV = [
@@ -13,7 +13,6 @@ const NAV = [
   { id: "review_center", label: "Exception Review", icon: ShieldAlert },
   { id: "file_compare", label: "File Diff Inspector", icon: Columns2 },
   { id: "reports", label: "Reports & Exports", icon: FileSpreadsheet },
-  { id: "system_check", label: "System Health", icon: Activity },
 ];
 
 export default function Sidebar() {

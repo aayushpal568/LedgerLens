@@ -4,6 +4,7 @@ import { Button, Card, Input, Select, Label, Badge, EmptyState } from "@/compone
 import { CLIENT_TYPES } from "@/lib/utils";
 import { toast } from "sonner";
 import { FileCheck2, Plus, Trash2, X, Save, Pencil, ListChecks } from "lucide-react";
+import { TwoStepDeleteDialog } from "@/components/TwoStepDeleteDialog";
 
 const TYPE_OPTIONS = ["PDF", "JPG", "JPEG", "PNG", "TIFF", "DOCX", "XLSX", "CSV"];
 const emptyItem = () => ({ name: "", aliases: [], allowed_types: [], rule: {} });
@@ -118,15 +119,20 @@ function TemplateEditor({ initial, onClose, onSaved }) {
   );
 }
 
-import { TwoStepDeleteDialog } from "@/components/TwoStepDeleteDialog";
-
 export default function Checklists() {
   const [templates, setTemplates] = useState([]);
   const [editing, setEditing] = useState(null);
   const [showNew, setShowNew] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
 
-  const load = async () => setTemplates(await api.listTemplates());
+  const load = async () => {
+    try {
+      const data = await api.listTemplates();
+      setTemplates(Array.isArray(data) ? data : []);
+    } catch {
+      setTemplates([]);
+    }
+  };
   useEffect(() => { load(); }, []);
 
   const promptRemove = (t) => {
@@ -158,7 +164,7 @@ export default function Checklists() {
         <Button data-testid="new-template-button" onClick={() => setShowNew(true)}><Plus className="h-4 w-4" /> New Template</Button>
       </div>
 
-      {templates.length === 0 ? (
+      {(templates || []).length === 0 ? (
         <Card><EmptyState icon={ListChecks} title="No templates" subtitle="Create a checklist template to enable missing-document detection." /></Card>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

@@ -15,33 +15,36 @@ export default function Reports() {
 
   const loadScans = useCallback(async () => {
     if (!activeClient) return;
-    const s = await api.listScans(activeClient.id);
-    setScans(s.filter((x) => x.status === "completed"));
-    if (!activeScan && s.filter((x) => x.status === "completed").length) setActiveScan(s.filter((x) => x.status === "completed")[0]);
+    try {
+      const s = await api.listScans(activeClient.id);
+      const list = Array.isArray(s) ? s : [];
+      const completed = list.filter((x) => x.status === "completed");
+      setScans(completed);
+      if (!activeScan && completed.length) setActiveScan(completed[0]);
+    } catch {
+      setScans([]);
+    }
   }, [activeClient, activeScan, setActiveScan]);
 
   useEffect(() => { loadScans(); }, [loadScans]);
-  useEffect(() => { if (scanId) api.getFindings(scanId).then(setFindings); }, [scanId]);
+  useEffect(() => {
+    if (scanId && api.getFindings) {
+      Promise.resolve(api.getFindings(scanId))
+        .then((data) => setFindings(Array.isArray(data) ? data : []))
+        .catch(() => setFindings([]));
+    }
+  }, [scanId]);
 
   const statusCounts = useMemo(() => {
     const c = {};
-    STATUS_OPTIONS.forEach((s) => { c[s.id] = findings.filter((f) => f.status === s.id).length; });
+    const list = Array.isArray(findings) ? findings : [];
+    STATUS_OPTIONS.forEach((s) => { c[s.id] = list.filter((f) => f.status === s.id).length; });
     return c;
   }, [findings]);
 
   const download = async (fmt) => {
     if (!scanId) return;
-    const filename = `review_report_${activeClient.name.replace(/[<>:"/\\|?*]+/g, "_").replace(/\s+/g, "_")}.${fmt}`;
     try {
-      if (window.__TAURI__?.core?.invoke) {
-        const data = await api.downloadReport(scanId, fmt);
-        const destination = await window.__TAURI__.core.invoke("save_report", {
-          filename,
-          data: Array.from(new Uint8Array(data)),
-        });
-        toast.success(`Report saved to ${destination}`);
-        return;
-      }
       window.open(api.reportUrl(scanId, fmt), "_blank");
     } catch (error) {
       toast.error(`Export failed: ${error?.message || "Unable to save report"}`);

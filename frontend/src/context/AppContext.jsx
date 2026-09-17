@@ -15,21 +15,27 @@ export function AppProvider({ children }) {
 
   const refreshFirm = useCallback(async () => setFirm(await api.getFirm()), []);
   const refreshClients = useCallback(async () => {
-    const data = await api.listClients();
-    setClients(data);
-    return data;
+    try {
+      const data = await api.listClients();
+      const list = Array.isArray(data) ? data : [];
+      setClients(list);
+      return list;
+    } catch {
+      setClients([]);
+      return [];
+    }
   }, []);
 
   useEffect(() => {
     let active = true;
     const initData = async () => {
-      // The one-file backend can take 10–20 seconds to unpack on a Windows cold start.
+      // Retry connecting on startup
       for (let attempt = 0; attempt < 30; attempt++) {
         try {
           const [f, c] = await Promise.all([api.getFirm(), api.listClients()]);
           if (!active) return;
-          setFirm(f);
-          setClients(c);
+          setFirm(f || null);
+          setClients(Array.isArray(c) ? c : []);
           return;
         } catch {
           if (!active) return;

@@ -37,8 +37,8 @@ export default function Overview() {
     if (firm) setForm({ name: firm.name || "", contact_email: firm.contact_email || "", retention_note: firm.retention_note || "" });
   }, [firm]);
 
-  const totalFiles = clients.reduce((s, c) => s + (c.file_count || 0), 0);
-  const totalExceptions = clients.reduce((s, c) => s + (c.last_scan?.total_findings || 0), 0);
+  const totalFiles = (clients || []).reduce((s, c) => s + (c.file_count || 0), 0);
+  const totalExceptions = (clients || []).reduce((s, c) => s + (c.last_scan?.total_findings || 0), 0);
 
   const save = async () => {
     setSaving(true);

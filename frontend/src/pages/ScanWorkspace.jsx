@@ -23,16 +23,26 @@ export default function ScanWorkspace() {
   const [uploadPct, setUploadPct] = useState(0);
   const [scan, setScan] = useState(null);
   const [dragOver, setDragOver] = useState(false);
-  const [localFolder, setLocalFolder] = useState("");
   const fileRef = useRef();
   const folderRef = useRef();
   const pollRef = useRef();
 
-  const isTauri = typeof window !== "undefined" && !!window.__TAURI__;
+  const loadFiles = useCallback(async (cid) => {
+    try {
+      const res = await api.listFiles(cid);
+      setFiles(Array.isArray(res) ? res : []);
+    } catch {
+      setFiles([]);
+    }
+  }, []);
 
-  const loadFiles = useCallback(async (cid) => setFiles(await api.listFiles(cid)), []);
-
-  useEffect(() => { api.listTemplates().then(setTemplates); }, []);
+  useEffect(() => {
+    if (api.listTemplates) {
+      Promise.resolve(api.listTemplates())
+        .then((res) => setTemplates(Array.isArray(res) ? res : []))
+        .catch(() => setTemplates([]));
+    }
+  }, []);
   useEffect(() => {
     if (activeClient) loadFiles(activeClient.id);
     setScan(null);
@@ -106,29 +116,7 @@ export default function ScanWorkspace() {
     });
     setScan(s);
     pollScan(s.id);
-    toast("Scan queued", { description: "Prioritizing supported local files…" });
-  };
-
-  // Desktop-only: pick a real folder via the Tauri dialog and scan it in place.
-  const pickLocalFolder = async () => {
-    try {
-      const selected = await window.__TAURI__.dialog.open({ directory: true, multiple: false });
-      if (selected) setLocalFolder(selected);
-    } catch {
-      toast.error("Folder selection unavailable");
-    }
-  };
-
-  const startLocalScan = async () => {
-    if (!localFolder) return toast.error("Choose a local folder first");
-    const s = await api.startLocalScan(activeClient.id, {
-      folder_path: localFolder,
-      template_id: templateId || null,
-      expected_period: period ? parseInt(period) : null,
-    });
-    setScan(s);
-    pollScan(s.id);
-    toast("Local scan queued", { description: localFolder });
+    toast("Scan queued", { description: "Scanning uploaded documents…" });
   };
 
   const handleCancelScan = async () => {
@@ -179,15 +167,15 @@ export default function ScanWorkspace() {
           <p className="text-sm text-muted-foreground mt-1">{activeClient.name} · {activeClient.client_type}</p>
         </div>
         <Select data-testid="workspace-client-switch" className="w-56" value={activeClient.id}
-          onChange={(e) => setActiveClient(clients.find((c) => c.id === e.target.value))}>
-          {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          onChange={(e) => setActiveClient((clients || []).find((c) => c.id === e.target.value))}>
+          {(clients || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </Select>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
           {/* Upload */}
-          {!isTauri && <Card className="p-6">
+          <Card className="p-6">
             <div
               data-testid="upload-dropzone"
               onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
@@ -250,7 +238,7 @@ export default function ScanWorkspace() {
                 </div>
               )}
             </div>
-          </Card>}
+          </Card>
 
           {/* Progress */}
           {scan && (
@@ -321,35 +309,12 @@ export default function ScanWorkspace() {
                   ))}
                 </Select>
               </div>
-              {!isTauri && <Button className="w-full" data-testid="start-scan-button" onClick={startScan} disabled={running || !files.length}>
+              <Button className="w-full" data-testid="start-scan-button" onClick={startScan} disabled={running || !files.length}>
                 {running ? <Spinner className="h-4 w-4" /> : <Play className="h-4 w-4" />}
                 {running ? "Scanning…" : "Start Scan"}
-              </Button>}
+              </Button>
             </div>
           </Card>
-
-          {isTauri && (
-            <Card className="p-6" data-testid="local-folder-card">
-              <div className="flex items-center gap-2 mb-2">
-                <FolderSearch className="h-4 w-4 text-primary" />
-                <h2 className="font-head font-semibold">Scan a Local Folder</h2>
-                <Badge className="ml-auto bg-accent text-accent-foreground border-border">Desktop</Badge>
-              </div>
-              <p className="text-xs text-muted-foreground mb-3">
-                Reads files directly from your computer — nothing is uploaded or copied.
-              </p>
-              <Button variant="outline" className="w-full" data-testid="pick-folder-button" onClick={pickLocalFolder}>
-                <FolderSearch className="h-4 w-4" /> {localFolder ? "Change Folder" : "Choose Folder"}
-              </Button>
-              {localFolder && (
-                <p className="text-xs font-mono-data text-muted-foreground mt-2 break-all" data-testid="local-folder-path">{localFolder}</p>
-              )}
-              <Button className="w-full mt-3" data-testid="start-local-scan-button" onClick={startLocalScan} disabled={running || !localFolder}>
-                {running ? <Spinner className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-                Scan This Folder
-              </Button>
-            </Card>
-          )}
 
           <Card className="p-5">
             <div className="flex gap-2 text-xs text-muted-foreground">

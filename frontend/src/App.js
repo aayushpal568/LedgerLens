@@ -11,17 +11,8 @@ import Checklists from "@/pages/Checklists";
 import ReviewCenter from "@/pages/ReviewCenter";
 import FileCompare from "@/pages/FileCompare";
 import Reports from "@/pages/Reports";
-import SystemCheck from "@/pages/SystemCheck";
-
 function Shell() {
-  const { tab, setTab } = useApp();
-
-  React.useEffect(() => {
-    const hasRun = localStorage.getItem("ledgerlens_first_run_checked");
-    if (!hasRun) {
-      setTab("system_check");
-    }
-  }, [setTab]);
+  const { tab } = useApp();
 
   const pages = {
     dashboard: <Overview />,
@@ -31,7 +22,6 @@ function Shell() {
     review_center: <ReviewCenter />,
     file_compare: <FileCompare />,
     reports: <Reports />,
-    system_check: <SystemCheck />,
   };
   return (
     <div className="h-screen flex flex-col bg-background text-foreground">
