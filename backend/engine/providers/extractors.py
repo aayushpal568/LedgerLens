@@ -19,17 +19,38 @@ class DefaultDocumentExtractor(DocumentExtractor):
         text, status, reason = extract_text(path, ext)
         result = ExtractionResult(text=text, status=status, reason=reason)
 
-        if status == STATUS_NEEDS_OCR and self.ocr is not None and self.ocr.available:
-            try:
-                import inspect
-                sig = inspect.signature(self.ocr.extract)
-                if "should_cancel" in sig.parameters:
-                    ocr_text = self.ocr.extract(path, ext, should_cancel=should_cancel)
-                else:
-                    ocr_text = self.ocr.extract(path, ext)
-            except Exception:  # noqa: BLE001 - OCR must never crash the scan
-                ocr_text = None
-            if ocr_text and ocr_text.strip():
-                return ExtractionResult(text=ocr_text.strip(), status=STATUS_OK, reason="",
-                                        ocr_used=True, meta={"ocr": self.ocr.name})
+        if status == STATUS_NEEDS_OCR:
+            if self.ocr is not None and self.ocr.available:
+                try:
+                    import inspect
+                    sig = inspect.signature(self.ocr.extract)
+                    if "should_cancel" in sig.parameters:
+                        ocr_text = self.ocr.extract(path, ext, should_cancel=should_cancel)
+                    else:
+                        ocr_text = self.ocr.extract(path, ext)
+                except Exception:  # noqa: BLE001 - OCR must never crash the scan
+                    ocr_text = None
+                if ocr_text and ocr_text.strip():
+                    return ExtractionResult(
+                        text=ocr_text.strip(),
+                        status=STATUS_OK,
+                        reason="",
+                        ocr_used=True,
+                        meta={"ocr": self.ocr.name},
+                    )
+                return ExtractionResult(
+                    text="",
+                    status=STATUS_NEEDS_OCR,
+                    reason=f"OCR processing failed or returned no text ({self.ocr.name})",
+                    ocr_used=False,
+                    meta={"ocr": self.ocr.name},
+                )
+            # OCR is not configured
+            provider_name = self.ocr.name if self.ocr else "none"
+            return ExtractionResult(
+                text="",
+                status=STATUS_NEEDS_OCR,
+                reason=f"Scanned document requires OCR, but OCR is not configured ({provider_name})",
+                ocr_used=False,
+            )
         return result

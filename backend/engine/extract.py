@@ -26,7 +26,7 @@ def extract_text(path: str, ext: str):
         if ext == "csv":
             return _extract_csv(path)
         if ext in IMAGE_EXTS:
-            return "", "needs_ocr", "Scanned image requires OCR (local desktop build)"
+            return "", "needs_ocr", "Scanned image requires OCR"
         return "", "error", f"Unsupported file type: .{ext}"
     except Exception as e:  # noqa: BLE001 - engine must never crash the scan
         return "", "error", f"Could not read file: {type(e).__name__}"

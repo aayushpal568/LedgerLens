@@ -312,9 +312,10 @@ class ScanEngine:
         return out
 
 
-def build_default_engine() -> ScanEngine:
-    """Default engine: text extraction with no-op providers."""
-    from .providers import DefaultDocumentExtractor, NoOpOCRProvider, NoOpLLMProvider
-    ocr = NoOpOCRProvider()
-    return ScanEngine(DefaultDocumentExtractor(ocr), ocr, NoOpLLMProvider())
+def build_default_engine(ocr_provider=None, llm_provider=None) -> ScanEngine:
+    """Default engine: text extraction with modular Baidu Unlimited-OCR."""
+    from .providers import DefaultDocumentExtractor, BaiduUnlimitedOCRProvider, NoOpLLMProvider
+    ocr = ocr_provider or BaiduUnlimitedOCRProvider()
+    llm = llm_provider or NoOpLLMProvider()
+    return ScanEngine(DefaultDocumentExtractor(ocr), ocr, llm)
 

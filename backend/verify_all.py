@@ -277,10 +277,97 @@ def test_end_to_end_integration():
         print("  [PASS] Full End-to-End Flow: Client -> Upload -> Process -> Detect -> Review -> PDF Report")
 
 
+def test_baidu_unlimited_ocr_integration():
+    print("\n--- 4. Testing Baidu Unlimited-OCR Provider & Pipeline ---")
+    from unittest.mock import patch, MagicMock
+    from PIL import Image, ImageDraw
+    from engine.providers import BaiduUnlimitedOCRProvider, DefaultDocumentExtractor
+    from engine.models import STATUS_OK, STATUS_NEEDS_OCR
+
+    # Test 1: Initialization without credentials (graceful unconfigured state)
+    provider_unconfigured = BaiduUnlimitedOCRProvider(endpoint="", api_key="")
+    assert provider_unconfigured.available is False
+    summary = provider_unconfigured.get_config_summary()
+    assert summary["available"] == "False"
+    assert summary["mode"] == "not_configured"
+    print("  [PASS] Baidu Unlimited-OCR initialization & safe defaults")
+
+    # Test 2: Configuration handling and credential masking
+    provider_configured = BaiduUnlimitedOCRProvider(
+        endpoint="https://ocr.ledgerlens.cloud/v1",
+        api_key="super_secret_baidu_api_token_xyz123",
+        model="baidu/Unlimited-OCR"
+    )
+    assert provider_configured.available is True
+    cfg = provider_configured.get_config_summary()
+    assert cfg["available"] == "True"
+    assert cfg["mode"] == "openai_compatible"
+    assert "super_secret_baidu_api_token_xyz123" not in cfg["api_key_masked"]
+    assert cfg["api_key_masked"].startswith("sup...")
+    print("  [PASS] Authentication & configuration handling with credential masking")
+
+    # Test 3: Unconfigured extraction fails gracefully without crashing
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_img = Path(tmpdir) / "invoice_receipt.png"
+        img = Image.new("RGB", (300, 150), color=(255, 255, 255))
+        d = ImageDraw.Draw(img)
+        d.text((10, 10), "Receipt 2024", fill=(0, 0, 0))
+        img.save(tmp_img)
+
+        # Unconfigured provider returns None
+        assert provider_unconfigured.extract(str(tmp_img), "png") is None
+
+        # Document extractor reports clear 'OCR not configured' reason
+        extractor_unconfigured = DefaultDocumentExtractor(provider_unconfigured)
+        ext_res = extractor_unconfigured.extract(str(tmp_img), "png")
+        assert ext_res.status == STATUS_NEEDS_OCR
+        assert "OCR is not configured" in ext_res.reason
+        print("  [PASS] Graceful handling & clear reporting when OCR is unconfigured")
+
+        # Test 4: Real image extraction with mocked Baidu Unlimited-OCR endpoint
+        fake_ocr_resp = MagicMock()
+        fake_ocr_resp.status_code = 200
+        fake_ocr_resp.json.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "content": "# INVOICE\nVendor: AWS Cloud\nTotal: $1,250.00\nYear: 2024"
+                    }
+                }
+            ]
+        }
+
+        with patch("httpx.Client.post", return_value=fake_ocr_resp):
+            text = provider_configured.extract(str(tmp_img), "png")
+            assert text is not None and "AWS Cloud" in text
+            print("  [PASS] Real image OCR extraction via OpenAI-compatible endpoint")
+
+            # Test 5: OCR text reaches document processing pipeline
+            extractor_configured = DefaultDocumentExtractor(provider_configured)
+            pipeline_res = extractor_configured.extract(str(tmp_img), "png")
+            assert pipeline_res.status == STATUS_OK
+            assert pipeline_res.ocr_used is True
+            assert pipeline_res.meta.get("ocr") == "baidu_unlimited_ocr"
+            assert "AWS Cloud" in pipeline_res.text
+            print("  [PASS] OCR text seamlessly feeds into document pipeline (status=OK, ocr_used=True)")
+
+        # Test 6: Network / server error handled cleanly
+        fake_err_resp = MagicMock()
+        fake_err_resp.status_code = 502
+        fake_err_resp.text = "Bad Gateway"
+        with patch("httpx.Client.post", return_value=fake_err_resp):
+            err_res = extractor_configured.extract(str(tmp_img), "png")
+            assert err_res.status == STATUS_NEEDS_OCR
+            assert err_res.ocr_used is False
+            assert "OCR processing failed" in err_res.reason
+            print("  [PASS] OCR server failure handled cleanly without crashing")
+
+
 if __name__ == "__main__":
     test_backend_api_and_database()
     test_core_engine_realistic_files()
     test_end_to_end_integration()
+    test_baidu_unlimited_ocr_integration()
     print("\n=======================================================")
     print("ALL VERIFICATION CHECKS PASSED SUCCESSFULLY!")
     print("=======================================================")
