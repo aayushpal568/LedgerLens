@@ -363,11 +363,146 @@ def test_baidu_unlimited_ocr_integration():
             print("  [PASS] OCR server failure handled cleanly without crashing")
 
 
+def test_claude_opus_fal_integration():
+    print("\n--- 5. Testing Claude Opus (fal.ai) LLM Integration ---")
+    import json
+    import httpx
+    from unittest.mock import patch, MagicMock
+    from engine.providers.llm import ClaudeOpusFalProvider
+
+    # Test 1: Unconfigured defaults
+    provider_unconfigured = ClaudeOpusFalProvider(api_key="", anthropic_key="")
+    assert provider_unconfigured.available is False
+    assert provider_unconfigured.backend_mode == "unconfigured"
+    assert provider_unconfigured.generate("test prompt") is None
+    assert provider_unconfigured.query_json("test prompt") is None
+    assert provider_unconfigured.classify_document("doc text", ["Invoice"]) is None
+    print("  [PASS] Unconfigured provider initializes safely with available=False")
+
+    # Test 2: Credential masking & configuration loading
+    provider_configured = ClaudeOpusFalProvider(
+        api_key="fal_sec_live_998877665544332211aabbcc",
+        endpoint="https://fal.run/fal-ai/any-llm",
+        model="anthropic/claude-3-opus",
+        anthropic_key="sk-ant-test-secret-key-12345",
+    )
+    assert provider_configured.available is True
+    assert provider_configured.backend_mode == "fal_ai"
+    cfg = provider_configured.get_config_summary()
+    assert cfg["available"] == "True"
+    assert cfg["backend_mode"] == "fal_ai"
+    assert cfg["fal_endpoint"] == "https://fal.run/fal-ai/any-llm"
+    assert cfg["fal_model"] == "anthropic/claude-3-opus"
+    assert "fal_sec_live_998877665544332211aabbcc" not in cfg["fal_key_masked"]
+    assert cfg["fal_key_masked"] == "fal...bcc"
+    assert "sk-ant-test-secret-key-12345" not in cfg["anthropic_key_masked"]
+    assert cfg["anthropic_key_masked"] == "sk-...345"
+    print("  [PASS] Credential masking & configuration handling (secrets never leaked)")
+
+    # Test 3: Document classification with extracted document text
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "output": json.dumps({
+            "classification": "Bank Statement",
+            "confidence": 0.97,
+            "reasoning": "Monthly checking account statement with transaction ledger",
+        })
+    }
+    with patch("httpx.Client.post", return_value=mock_resp) as mock_post:
+        cls_result = provider_configured.classify_document(
+            text="JPMorgan Chase Bank Statement\nAccount: ending in 4102\nStatement Period: 01/01/2024 to 01/31/2024",
+            candidate_types=["Bank Statement", "Vendor Invoice", "Tax Return"],
+        )
+        assert cls_result == "Bank Statement"
+        # Confirm request headers and payload
+        args = mock_post.call_args
+        assert args.kwargs["headers"]["Authorization"] == "Key fal_sec_live_998877665544332211aabbcc"
+        assert args.kwargs["json"]["model"] == "anthropic/claude-3-opus"
+        assert "JPMorgan Chase" in args.kwargs["json"]["prompt"]
+        print("  [PASS] Document classification via fal.ai Claude Opus endpoint")
+
+    # Test 4: Structured field extraction
+    mock_field_resp = MagicMock()
+    mock_field_resp.status_code = 200
+    mock_field_resp.json.return_value = {
+        "output": json.dumps({
+            "field": "tax_year",
+            "value": "2024",
+            "confidence": 0.99,
+        })
+    }
+    with patch("httpx.Client.post", return_value=mock_field_resp):
+        val = provider_configured.extract_field("Client tax document for year 2024", "tax_year")
+        assert val == "2024"
+        print("  [PASS] Structured field extraction via Claude Opus")
+
+    # Test 5: Ambiguous case semantic analysis
+    mock_analysis_resp = MagicMock()
+    mock_analysis_resp.status_code = 200
+    mock_analysis_resp.json.return_value = {
+        "output": json.dumps({
+            "summary": "Ambiguous invoice with conflicting tax years.",
+            "analysis": "Expense incurred in 2023 but invoiced in 2024.",
+            "confidence": "high",
+            "entities": {"period_year": 2024, "vendor_or_client": "Stripe Inc"},
+            "findings": [{"issue": "Accrual required", "severity": "medium", "recommendation": "Post accrual"}],
+        })
+    }
+    with patch("httpx.Client.post", return_value=mock_analysis_resp):
+        analysis = provider_configured.analyze_document("Stripe Inc billing doc", "Analyze timing")
+        assert analysis is not None
+        assert analysis["entities"]["vendor_or_client"] == "Stripe Inc"
+        assert len(analysis["findings"]) == 1
+        print("  [PASS] Ambiguous document analysis with structured JSON return")
+
+    # Test 6: Interchangeable direct Anthropic fallback routing
+    provider_anthropic = ClaudeOpusFalProvider(
+        api_key="",
+        anthropic_key="sk-ant-valid-key",
+    )
+    assert provider_anthropic.backend_mode == "anthropic_direct"
+    mock_anthropic_resp = MagicMock()
+    mock_anthropic_resp.status_code = 200
+    mock_anthropic_resp.json.return_value = {
+        "content": [{"type": "text", "text": json.dumps({"classification": "Vendor Invoice", "confidence": 0.95})}]
+    }
+    with patch("httpx.Client.post", return_value=mock_anthropic_resp) as mock_post:
+        res = provider_anthropic.classify_document("Invoice from Dell", ["Vendor Invoice"])
+        assert res == "Vendor Invoice"
+        assert mock_post.call_args.kwargs["headers"]["x-api-key"] == "sk-ant-valid-key"
+        print("  [PASS] Replaceable direct Anthropic API fallback routing")
+
+    # Test 7: Error handling (401, 429, 500, network timeouts, malformed JSON)
+    for code, desc in [(401, "Auth failure"), (429, "Rate limit"), (500, "Server error")]:
+        err_mock = MagicMock()
+        err_mock.status_code = code
+        err_mock.text = f"Error {code}"
+        with patch("httpx.Client.post", return_value=err_mock):
+            assert provider_configured.generate("test") is None
+
+    with patch("httpx.Client.post", side_effect=httpx.TimeoutException("Timeout")):
+        assert provider_configured.generate("test") is None
+
+    malformed_mock = MagicMock()
+    malformed_mock.status_code = 200
+    malformed_mock.json.return_value = {"output": "Not valid JSON at all"}
+    with patch("httpx.Client.post", return_value=malformed_mock):
+        assert provider_configured.query_json("test") is None
+    print("  [PASS] Error handling & timeouts (401, 429, 500, timeout, malformed JSON)")
+
+    # Test 8: Engine wiring
+    engine = build_default_engine()
+    assert isinstance(engine.llm, ClaudeOpusFalProvider)
+    print("  [PASS] Default engine wires ClaudeOpusFalProvider")
+
+
 if __name__ == "__main__":
     test_backend_api_and_database()
     test_core_engine_realistic_files()
     test_end_to_end_integration()
     test_baidu_unlimited_ocr_integration()
+    test_claude_opus_fal_integration()
     print("\n=======================================================")
     print("ALL VERIFICATION CHECKS PASSED SUCCESSFULLY!")
     print("=======================================================")

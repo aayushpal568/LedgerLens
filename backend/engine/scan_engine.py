@@ -313,9 +313,9 @@ class ScanEngine:
 
 
 def build_default_engine(ocr_provider=None, llm_provider=None) -> ScanEngine:
-    """Default engine: text extraction with modular Baidu Unlimited-OCR."""
-    from .providers import DefaultDocumentExtractor, BaiduUnlimitedOCRProvider, NoOpLLMProvider
+    """Default engine: text extraction with modular Baidu Unlimited-OCR and Claude Opus (fal.ai)."""
+    from .providers import DefaultDocumentExtractor, BaiduUnlimitedOCRProvider, ClaudeOpusFalProvider
     ocr = ocr_provider or BaiduUnlimitedOCRProvider()
-    llm = llm_provider or NoOpLLMProvider()
+    llm = llm_provider or ClaudeOpusFalProvider()
     return ScanEngine(DefaultDocumentExtractor(ocr), ocr, llm)
 

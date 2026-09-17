@@ -78,3 +78,7 @@ class LLMProvider(ABC):
     @abstractmethod
     def extract_field(self, text: str, field: str) -> Optional[str]:
         ...
+
+    def analyze_document(self, text: str, prompt: str) -> Optional[dict]:
+        """Analyze ambiguous document cases or accounting semantics."""
+        return None

@@ -3,7 +3,7 @@
 from .file_sources import LocalPathFileSource, LocalDirectoryFileSource
 from .extractors import DefaultDocumentExtractor
 from .ocr import NoOpOCRProvider, BaiduUnlimitedOCRProvider
-from .llm import NoOpLLMProvider
+from .llm import NoOpLLMProvider, ClaudeOpusFalProvider
 
 __all__ = [
     "LocalPathFileSource",
@@ -12,5 +12,6 @@ __all__ = [
     "NoOpOCRProvider",
     "BaiduUnlimitedOCRProvider",
     "NoOpLLMProvider",
+    "ClaudeOpusFalProvider",
 ]
 
