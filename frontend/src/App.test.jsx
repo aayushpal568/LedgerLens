@@ -264,4 +264,49 @@ describe("Cloud LedgerLens Frontend Verification", () => {
     expect(container.querySelector("[data-testid='export-xlsx-button']")).not.toBeNull();
     expect(container.querySelector("[data-testid='export-csv-button']")).not.toBeNull();
   });
+
+  test("9. Reports Page authenticated export invokes downloadReport for CSV, XLSX, and PDF", async () => {
+    function TestReportsWrapper() {
+      const { setActiveClient, setActiveScan } = useApp();
+      React.useEffect(() => {
+        setActiveClient({ id: "c-1", name: "Acme Corp", client_type: "Corporation" });
+        setActiveScan({ id: "s-1", status: "completed", started_at: "2026-01-01T00:00:00Z" });
+      }, [setActiveClient, setActiveScan]);
+      return <Reports />;
+    }
+
+    await act(async () => {
+      root.render(
+        <AppProvider>
+          <TestReportsWrapper />
+        </AppProvider>
+      );
+    });
+
+    const windowOpenSpy = jest.spyOn(window, "open").mockImplementation(() => {});
+    const { api } = require("./lib/api");
+    api.downloadReport.mockClear();
+
+    const csvBtn = container.querySelector("[data-testid='export-csv-button']");
+    await act(async () => {
+      csvBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(api.downloadReport).toHaveBeenCalledWith("s-1", "csv");
+
+    const xlsxBtn = container.querySelector("[data-testid='export-xlsx-button']");
+    await act(async () => {
+      xlsxBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(api.downloadReport).toHaveBeenCalledWith("s-1", "xlsx");
+
+    const pdfBtn = container.querySelector("[data-testid='export-pdf-button']");
+    await act(async () => {
+      pdfBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(api.downloadReport).toHaveBeenCalledWith("s-1", "pdf");
+
+    // window.open would lose in-memory Bearer token causing 401
+    expect(windowOpenSpy).not.toHaveBeenCalled();
+    windowOpenSpy.mockRestore();
+  });
 });

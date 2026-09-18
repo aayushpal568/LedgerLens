@@ -45,7 +45,32 @@ export default function Reports() {
   const download = async (fmt) => {
     if (!scanId) return;
     try {
-      window.open(api.reportUrl(scanId, fmt), "_blank");
+      const data = await api.downloadReport(scanId, fmt);
+      const mimeTypes = {
+        csv: "text/csv;charset=utf-8;",
+        xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        pdf: "application/pdf",
+      };
+      const mime = mimeTypes[fmt] || "application/octet-stream";
+      const blob = new Blob([data], { type: mime });
+      if (typeof window !== "undefined" && window.URL && typeof window.URL.createObjectURL === "function") {
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.style.display = "none";
+        a.href = url;
+        const clientSlug = (activeClient?.name || "client").toLowerCase().replace(/[^a-z0-9_-]+/g, "_");
+        a.download = `ledgerlens_report_${clientSlug}_${fmt}.${fmt}`;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+          if (typeof window.URL?.revokeObjectURL === "function") {
+            window.URL.revokeObjectURL(url);
+          }
+          if (a.parentNode) {
+            a.parentNode.removeChild(a);
+          }
+        }, 100);
+      }
     } catch (error) {
       toast.error(`Export failed: ${error?.message || "Unable to save report"}`);
     }
