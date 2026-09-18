@@ -35,6 +35,7 @@ class Tool:
     parameters: Dict[str, Any]
     handler: Callable[..., Coroutine[Any, Any, Any]]
     read_only: bool = True
+    approval_required: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -42,6 +43,7 @@ class Tool:
             "description": self.description,
             "parameters": self.parameters,
             "read_only": self.read_only,
+            "approval_required": self.approval_required,
         }
 
 
@@ -135,6 +137,7 @@ async def execute_tool(
     arguments: Optional[Dict[str, Any]] = None,
     registry: Optional[ToolRegistry] = None,
     db=None,
+    is_approved: bool = False,
 ) -> Dict[str, Any]:
     """Secure central entrypoint to execute an agent tool.
 
@@ -142,7 +145,7 @@ async def execute_tool(
     - User is an AuthedUser with valid non-empty firm_id.
     - Tool exists in the registry (fails closed).
     - Arguments conform to the tool's parameter schema.
-    - Read-only flag is checked and enforced.
+    - Approval requirement is checked and enforced.
     - Handlers execute through backend/services.py (preserving tenant scoping).
     - Returns a structured, JSON-serializable result.
     """
@@ -174,14 +177,13 @@ async def execute_tool(
             "error_type": "InvalidArgument",
         }
 
-    # 4. Enforce read-only constraint
-    # In Step 4, all tools are read-only; destructive operations are disallowed
-    if not tool.read_only:
+    # 4. Enforce approval constraint for action tools
+    if tool.approval_required and not is_approved:
         return {
             "success": False,
             "tool": tool_name,
-            "error": f"Tool '{tool_name}' is not marked read-only and cannot be executed.",
-            "error_type": "ReadOnlyViolation",
+            "error": f"Tool '{tool_name}' requires human approval before execution.",
+            "error_type": "ApprovalRequired",
         }
 
     # 5. Execute handler

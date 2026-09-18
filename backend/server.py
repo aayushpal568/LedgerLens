@@ -124,6 +124,11 @@ class AgentMessageRequest(BaseModel):
     text: str
 
 
+class ApprovalRejectRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    reason: Optional[str] = None
+
+
 # ----------------------------- firm --------------------------------
 @api_router.get("/firm")
 async def get_firm(current_user: AuthedUser = Depends(get_current_user)):
@@ -291,6 +296,54 @@ async def cancel_agent_run(
     current_user: AuthedUser = Depends(get_current_user),
 ):
     return await services.cancel_agent_run(current_user, run_id, db=db)
+
+
+@api_router.get("/agent/approvals")
+async def list_agent_approvals(
+    run_id: Optional[str] = None,
+    thread_id: Optional[str] = None,
+    status: Optional[str] = None,
+    current_user: AuthedUser = Depends(get_current_user),
+):
+    return await services.list_agent_approvals(
+        current_user,
+        run_id=run_id,
+        thread_id=thread_id,
+        status=status,
+        db=db,
+    )
+
+
+@api_router.get("/agent/approvals/{approval_id}")
+async def get_agent_approval(
+    approval_id: str,
+    current_user: AuthedUser = Depends(get_current_user),
+):
+    return await services.get_agent_approval(current_user, approval_id, db=db)
+
+
+@api_router.post("/agent/approvals/{approval_id}/approve", status_code=202)
+async def approve_agent_approval(
+    approval_id: str,
+    current_user: AuthedUser = Depends(get_current_user),
+):
+    from agent.loop import resume_agent_run_background
+    updated = await services.approve_agent_approval(current_user, approval_id, db=db)
+    resume_agent_run_background(current_user, approval_id, is_approved=True, db=db)
+    return updated
+
+
+@api_router.post("/agent/approvals/{approval_id}/reject", status_code=202)
+async def reject_agent_approval(
+    approval_id: str,
+    body: Optional[ApprovalRejectRequest] = None,
+    current_user: AuthedUser = Depends(get_current_user),
+):
+    from agent.loop import resume_agent_run_background
+    reason = body.reason if body else None
+    updated = await services.reject_agent_approval(current_user, approval_id, reason=reason, db=db)
+    resume_agent_run_background(current_user, approval_id, is_approved=False, reason=reason, db=db)
+    return updated
 
 
 # Public Root Endpoint

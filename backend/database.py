@@ -28,6 +28,7 @@ COLLECTIONS = [
     "agent_messages",
     "agent_runs",
     "agent_run_steps",
+    "agent_approvals",
 ]
 
 IMMUTABLE_FIELDS = {"id", "firm_id", "created_at"}
@@ -463,6 +464,10 @@ class PostgresDatabase:
                     CREATE INDEX IF NOT EXISTS idx_agent_messages_thread ON agent_messages ((doc->>'thread_id'));
                     CREATE INDEX IF NOT EXISTS idx_agent_runs_thread ON agent_runs ((doc->>'thread_id'));
                     CREATE INDEX IF NOT EXISTS idx_agent_run_steps_run ON agent_run_steps ((doc->>'run_id'));
+                    CREATE INDEX IF NOT EXISTS idx_agent_approvals_firm ON agent_approvals ((doc->>'firm_id'));
+                    CREATE INDEX IF NOT EXISTS idx_agent_approvals_run ON agent_approvals ((doc->>'run_id'));
+                    CREATE INDEX IF NOT EXISTS idx_agent_approvals_status ON agent_approvals ((doc->>'status'));
+                    CREATE INDEX IF NOT EXISTS idx_agent_approvals_thread ON agent_approvals ((doc->>'thread_id'));
                 """)
             logger.info(f"Connected to PostgreSQL database at {safe_url}")
         except Exception as e:

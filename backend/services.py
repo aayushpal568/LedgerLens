@@ -106,6 +106,7 @@ async def create_client(
     name: str,
     client_type: str = "Small Business",
     notes: Optional[str] = "",
+    tax_id: Optional[str] = None,
     db=None,
 ) -> dict:
     """Create a new client entity scoped to the authenticated firm."""
@@ -118,6 +119,8 @@ async def create_client(
         "notes": notes or "",
         "created_at": now_iso(),
     }
+    if tax_id is not None:
+        doc["tax_id"] = tax_id
     await database.clients.insert_one(dict(doc))
     return clean(doc)
 
@@ -515,6 +518,7 @@ MAX_AGENT_MESSAGE_LENGTH = 10000
 
 RUN_STATUS_QUEUED = "queued"
 RUN_STATUS_RUNNING = "running"
+RUN_STATUS_WAITING_FOR_APPROVAL = "waiting_for_approval"
 RUN_STATUS_COMPLETED = "completed"
 RUN_STATUS_FAILED = "failed"
 RUN_STATUS_CANCELLED = "cancelled"
@@ -522,6 +526,7 @@ RUN_STATUS_CANCELLED = "cancelled"
 VALID_RUN_STATUSES = {
     RUN_STATUS_QUEUED,
     RUN_STATUS_RUNNING,
+    RUN_STATUS_WAITING_FOR_APPROVAL,
     RUN_STATUS_COMPLETED,
     RUN_STATUS_FAILED,
     RUN_STATUS_CANCELLED,
@@ -704,18 +709,14 @@ async def get_agent_run(user: AuthedUser, run_id: str, db=None) -> dict:
 
 async def cancel_agent_run(user: AuthedUser, run_id: str, db=None) -> dict:
     """Cancel an active or queued agent run."""
-    database = _get_db(db)
-    clean_run_id = (run_id or "").strip()
-    await get_agent_run(user, clean_run_id, db=database)
-
-    from agent.loop import request_run_cancellation
-    request_run_cancellation(clean_run_id)
-
-    await database.agent_runs.update_one(
-        scoped(database.agent_runs, user, {"id": clean_run_id}),
-        {"$set": {"status": RUN_STATUS_CANCELLED, "completed_at": now_iso()}},
+    import agent.loop as loop
+    loop.request_run_cancellation(run_id)
+    return await update_agent_run(
+        user,
+        run_id,
+        {"status": RUN_STATUS_CANCELLED, "completed_at": now_iso()},
+        db=db,
     )
-    return {"ok": True, "status": RUN_STATUS_CANCELLED}
 
 
 async def update_agent_run(
@@ -784,3 +785,37 @@ async def list_agent_run_steps(user: AuthedUser, run_id: str, db=None) -> List[d
         scoped(database.agent_run_steps, user, {"run_id": run_id.strip()}),
         {"_id": 0},
     ).sort("created_at", 1).to_list(10000)
+
+
+# ---------------------------- Approval Services ----------------------------
+async def list_agent_approvals(
+    user: AuthedUser,
+    run_id: Optional[str] = None,
+    thread_id: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 50,
+    db=None,
+) -> List[dict]:
+    """List approvals scoped to user's firm."""
+    import agent.approvals as approvals
+    return await approvals.list_approvals(
+        user, run_id=run_id, thread_id=thread_id, status=status, limit=limit, db=db
+    )
+
+
+async def get_agent_approval(user: AuthedUser, approval_id: str, db=None) -> dict:
+    """Get single approval scoped to user's firm."""
+    import agent.approvals as approvals
+    return await approvals.get_approval(user, approval_id, db=db)
+
+
+async def approve_agent_approval(user: AuthedUser, approval_id: str, db=None) -> dict:
+    """Approve a pending approval."""
+    import agent.approvals as approvals
+    return await approvals.approve_approval(user, approval_id, db=db)
+
+
+async def reject_agent_approval(user: AuthedUser, approval_id: str, reason: Optional[str] = None, db=None) -> dict:
+    """Reject a pending approval."""
+    import agent.approvals as approvals
+    return await approvals.reject_approval(user, approval_id, reason=reason, db=db)

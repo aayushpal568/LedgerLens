@@ -51,7 +51,7 @@ from agent import (
 from auth_dep import AuthedUser
 
 
-EXPECTED_TOOLS = {
+EXPECTED_READ_ONLY_TOOLS = {
     "list_clients",
     "list_files",
     "list_templates",
@@ -61,6 +61,14 @@ EXPECTED_TOOLS = {
     "get_agent_run_status",
 }
 
+EXPECTED_ACTION_TOOLS = {
+    "run_scan",
+    "create_client",
+    "set_finding_review",
+}
+
+EXPECTED_TOOLS = EXPECTED_READ_ONLY_TOOLS | EXPECTED_ACTION_TOOLS
+
 
 # ===========================================================================
 # 1. Registry Integrity
@@ -69,11 +77,22 @@ def test_registry_contains_exact_read_only_tools():
     registered_names = set(default_registry.tool_names())
     assert registered_names == EXPECTED_TOOLS, f"Registry mismatch: {registered_names} vs {EXPECTED_TOOLS}"
 
-    for name in EXPECTED_TOOLS:
+    for name in EXPECTED_READ_ONLY_TOOLS:
         tool = default_registry.get(name)
         assert tool is not None
         assert tool.name == name
         assert tool.read_only is True, f"Tool '{name}' must be read-only"
+        assert tool.approval_required is False
+        assert len(tool.description.strip()) > 10
+        assert tool.parameters.get("type") == "object"
+        assert callable(tool.handler)
+
+    for name in EXPECTED_ACTION_TOOLS:
+        tool = default_registry.get(name)
+        assert tool is not None
+        assert tool.name == name
+        assert tool.read_only is False, f"Tool '{name}' must be action tool"
+        assert tool.approval_required is True
         assert len(tool.description.strip()) > 10
         assert tool.parameters.get("type") == "object"
         assert callable(tool.handler)

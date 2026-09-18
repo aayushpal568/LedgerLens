@@ -292,7 +292,144 @@ async def handle_get_agent_run_status(user: AuthedUser, args: Dict[str, Any], db
 
 
 # ---------------------------------------------------------------------------
-# Registration Helper
+# 8. run_scan (Action Tool - requires approval)
+# ---------------------------------------------------------------------------
+RUN_SCAN_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "client_id": {
+            "type": "string",
+            "description": "Unique identifier of the client to audit.",
+        },
+        "template_id": {
+            "type": "string",
+            "description": "Unique identifier of the checklist template to scan against.",
+        },
+        "expected_period": {
+            "type": "string",
+            "description": "Optional period identifier, e.g. '2024' or 'Q1 2024'.",
+        },
+    },
+    "required": ["client_id", "template_id"],
+    "additionalProperties": False,
+}
+
+
+async def handle_run_scan(user: AuthedUser, args: Dict[str, Any], db=None) -> Dict[str, Any]:
+    """Initiate an automated document audit scan for a client against a checklist template."""
+    client_id = str(args["client_id"]).strip()
+    template_id = str(args["template_id"]).strip()
+    raw_period = args.get("expected_period")
+    period_arg = int(raw_period) if (raw_period and str(raw_period).isdigit()) else raw_period
+    scan = await services.start_scan(user, client_id, template_id=template_id, expected_period=period_arg, db=db)
+    return {
+        "scan_id": scan["id"],
+        "client_id": client_id,
+        "client_name": scan.get("client_name"),
+        "template_id": template_id,
+        "status": scan.get("status", "queued"),
+        "message": "Audit scan initiated successfully.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# 9. create_client (Action Tool - requires approval)
+# ---------------------------------------------------------------------------
+CREATE_CLIENT_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "name": {
+            "type": "string",
+            "description": "Name of the new client organization or individual.",
+        },
+        "tax_id": {
+            "type": "string",
+            "description": "Optional tax identification number or EIN.",
+        },
+        "notes": {
+            "type": "string",
+            "description": "Optional notes or description for the client.",
+        },
+    },
+    "required": ["name"],
+    "additionalProperties": False,
+}
+
+
+async def handle_create_client(user: AuthedUser, args: Dict[str, Any], db=None) -> Dict[str, Any]:
+    """Create a new client entity in the authenticated accounting firm."""
+    name = str(args["name"]).strip()
+    tax_id = str(args["tax_id"]).strip() if args.get("tax_id") else None
+    notes = str(args.get("notes") or "").strip()
+    client = await services.create_client(user, name=name, notes=notes, tax_id=tax_id, db=db)
+    return {
+        "client_id": client["id"],
+        "name": client["name"],
+        "tax_id": client.get("tax_id"),
+        "notes": client.get("notes", ""),
+        "created_at": client.get("created_at"),
+        "message": f"Client '{client['name']}' created successfully.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# 10. set_finding_review (Action Tool - requires approval)
+# ---------------------------------------------------------------------------
+SET_FINDING_REVIEW_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "finding_id": {
+            "type": "string",
+            "description": "Unique identifier of the finding to review.",
+        },
+        "review_status": {
+            "type": "string",
+            "enum": ["needs_review", "accepted", "ignored"],
+            "description": "Review status disposition: 'needs_review', 'accepted', or 'ignored'.",
+        },
+        "review_notes": {
+            "type": "string",
+            "description": "Optional notes or rationale for the review decision.",
+        },
+    },
+    "required": ["finding_id", "review_status"],
+    "additionalProperties": False,
+}
+
+
+async def handle_set_finding_review(user: AuthedUser, args: Dict[str, Any], db=None) -> Dict[str, Any]:
+    """Update the review status disposition and audit notes for a finding."""
+    finding_id = str(args["finding_id"]).strip()
+    review_status = str(args["review_status"]).strip()
+    review_notes = str(args.get("review_notes") or "").strip()
+    status_map = {
+        "needs_review": "review_later",
+        "accepted": "keep",
+        "ignored": "ignore",
+    }
+    target_status = status_map.get(review_status, review_status)
+    updated = await services.update_finding(
+        user,
+        finding_id,
+        {
+            "status": target_status,
+            "review_status": review_status,
+            "note": review_notes,
+            "review_notes": review_notes,
+        },
+        db=db,
+    )
+    return {
+        "finding_id": finding_id,
+        "review_status": review_status,
+        "status": updated.get("status"),
+        "review_notes": review_notes,
+        "message": f"Finding review disposition set to '{review_status}'.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tool Lists & Registration Helpers
 # ---------------------------------------------------------------------------
 READ_ONLY_TOOLS = [
     Tool(
@@ -301,6 +438,7 @@ READ_ONLY_TOOLS = [
         parameters=LIST_CLIENTS_SCHEMA,
         handler=handle_list_clients,
         read_only=True,
+        approval_required=False,
     ),
     Tool(
         name="list_files",
@@ -308,6 +446,7 @@ READ_ONLY_TOOLS = [
         parameters=LIST_FILES_SCHEMA,
         handler=handle_list_files,
         read_only=True,
+        approval_required=False,
     ),
     Tool(
         name="list_templates",
@@ -315,6 +454,7 @@ READ_ONLY_TOOLS = [
         parameters=LIST_TEMPLATES_SCHEMA,
         handler=handle_list_templates,
         read_only=True,
+        approval_required=False,
     ),
     Tool(
         name="get_scan_status",
@@ -322,6 +462,7 @@ READ_ONLY_TOOLS = [
         parameters=GET_SCAN_STATUS_SCHEMA,
         handler=handle_get_scan_status,
         read_only=True,
+        approval_required=False,
     ),
     Tool(
         name="get_findings",
@@ -329,6 +470,7 @@ READ_ONLY_TOOLS = [
         parameters=GET_FINDINGS_SCHEMA,
         handler=handle_get_findings,
         read_only=True,
+        approval_required=False,
     ),
     Tool(
         name="summarize_findings",
@@ -336,6 +478,7 @@ READ_ONLY_TOOLS = [
         parameters=SUMMARIZE_FINDINGS_SCHEMA,
         handler=handle_summarize_findings,
         read_only=True,
+        approval_required=False,
     ),
     Tool(
         name="get_agent_run_status",
@@ -343,16 +486,59 @@ READ_ONLY_TOOLS = [
         parameters=GET_AGENT_RUN_STATUS_SCHEMA,
         handler=handle_get_agent_run_status,
         read_only=True,
+        approval_required=False,
     ),
 ]
 
+ACTION_TOOLS = [
+    Tool(
+        name="run_scan",
+        description="Initiate an automated document audit scan for a client against a checklist template. (Requires human approval)",
+        parameters=RUN_SCAN_SCHEMA,
+        handler=handle_run_scan,
+        read_only=False,
+        approval_required=True,
+    ),
+    Tool(
+        name="create_client",
+        description="Create a new client entity in the authenticated accounting firm. (Requires human approval)",
+        parameters=CREATE_CLIENT_SCHEMA,
+        handler=handle_create_client,
+        read_only=False,
+        approval_required=True,
+    ),
+    Tool(
+        name="set_finding_review",
+        description="Update the review status disposition and audit notes for a finding. (Requires human approval)",
+        parameters=SET_FINDING_REVIEW_SCHEMA,
+        handler=handle_set_finding_review,
+        read_only=False,
+        approval_required=True,
+    ),
+]
+
+ALL_TOOLS = READ_ONLY_TOOLS + ACTION_TOOLS
+
 
 def register_read_only_tools(registry: ToolRegistry) -> None:
-    """Register all 7 standard read-only tools into the specified registry."""
+    """Register all standard read-only tools into the specified registry."""
     for tool in READ_ONLY_TOOLS:
         if not registry.contains(tool.name):
             registry.register(tool)
 
 
-# Auto-register standard read-only tools into default_registry
-register_read_only_tools(default_registry)
+def register_action_tools(registry: ToolRegistry) -> None:
+    """Register all standard action tools into the specified registry."""
+    for tool in ACTION_TOOLS:
+        if not registry.contains(tool.name):
+            registry.register(tool)
+
+
+def register_all_tools(registry: ToolRegistry) -> None:
+    """Register both read-only and action tools into the specified registry."""
+    register_read_only_tools(registry)
+    register_action_tools(registry)
+
+
+# Auto-register all tools into default_registry
+register_all_tools(default_registry)

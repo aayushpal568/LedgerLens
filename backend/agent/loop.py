@@ -43,6 +43,8 @@ import re
 from typing import Any, Dict, List, Optional, Set
 
 from auth_dep import AuthedUser
+import agent.approvals as approvals
+from agent.grounding import verify_grounding
 from agent.registry import Tool, default_registry, execute_tool, validate_tool_arguments
 import services
 
@@ -125,29 +127,45 @@ def extract_json(text: Optional[str]) -> Optional[Dict[str, Any]]:
 
 def build_system_prompt(tools: List[Tool]) -> str:
     """Generate the strict accounting agent system prompt with tool definitions and JSON protocol."""
-    tool_descriptions = []
-    for t in tools:
-        tool_descriptions.append(
+    read_only_tools = [t for t in tools if t.read_only or not t.approval_required]
+    action_tools = [t for t in tools if not t.read_only or t.approval_required]
+
+    ro_descriptions = []
+    for t in read_only_tools:
+        ro_descriptions.append(
             f"- Tool '{t.name}': {t.description}\n"
             f"  Parameters schema: {json.dumps(t.parameters)}"
         )
+    ro_block = "\n".join(ro_descriptions)
 
-    tools_block = "\n".join(tool_descriptions)
+    action_descriptions = []
+    for t in action_tools:
+        action_descriptions.append(
+            f"- Action Tool '{t.name}' (REQUIRES HUMAN APPROVAL): {t.description}\n"
+            f"  Parameters schema: {json.dumps(t.parameters)}"
+        )
+    action_block = "\n".join(action_descriptions)
 
     return (
         "You are the LedgerLens AI Accounting Assistant, an expert CPA agent specialized in "
-        "assisting accountants with client files, checklist templates, and audit scans.\n\n"
-        "AVAILABLE READ-ONLY TOOLS:\n"
-        f"{tools_block}\n\n"
+        "assisting accountants with client files, checklist templates, audit scans, and findings.\n\n"
+        "AVAILABLE READ-ONLY INSPECTION TOOLS:\n"
+        f"{ro_block}\n\n"
+        "AVAILABLE ACTION TOOLS (REQUIRE HUMAN APPROVAL):\n"
+        f"{action_block}\n\n"
         "STRICT OPERATIONAL RULES:\n"
-        "1. Tools are your ONLY way to access LedgerLens data. Never invent or hallucinate client names, "
+        "1. Tools are your ONLY way to access or modify LedgerLens data. Never invent or hallucinate client names, "
         "files, periods, scans, or findings.\n"
         "2. Do NOT expose internal filesystem paths (such as storage paths), database identifiers (_id), "
         "or raw document OCR text to the user.\n"
         "3. Use tool results as the absolute source of truth. If information is missing or not found, "
         "explicitly inform the accountant.\n"
-        "4. Do NOT claim an action was performed unless confirmed by a tool result.\n"
-        "5. Only read-only inspection tools are available. No write, update, or deletion tools exist in this mode.\n\n"
+        "4. Action tools (run_scan, create_client, set_finding_review) require human approval. When you call an "
+        "action tool, execution pauses and the user is asked to approve it. Propose actions when the user asks "
+        "you to perform an action.\n"
+        "5. Do NOT claim an action was performed unless confirmed by a successful tool result. If an action was "
+        "rejected or failed, clearly explain that it was not performed.\n"
+        "6. Maximum 1 'run_scan' call allowed per run.\n\n"
         "MANDATORY JSON RESPONSE PROTOCOL:\n"
         "For EVERY turn, you MUST respond STRICTLY with a single valid JSON object. Do not include any "
         "conversational text, markdown formatting, or preamble outside the JSON object.\n\n"
@@ -194,10 +212,11 @@ async def run_agent_loop(
     llm_provider: Optional[Any] = None,
     registry: Optional[Any] = None,
     db=None,
+    is_resume: bool = False,
 ) -> Dict[str, Any]:
-    """Execute the bounded async agent loop for a queued agent run.
+    """Execute the bounded async agent loop for a queued or resuming agent run.
 
-    Idempotent: Executes at most once per run_id.
+    Idempotent: Executes at most once per active run.
     """
     # 1. Idempotency and run state check
     async with _RUN_LOCK:
@@ -212,9 +231,18 @@ async def run_agent_loop(
             logger.error(f"Cannot load agent run '{run_id}': {e}")
             return {"status": "error", "error": str(e)}
 
-        if current_run.get("status") != services.RUN_STATUS_QUEUED:
+        allowed_statuses = (
+            {services.RUN_STATUS_QUEUED}
+            if not is_resume
+            else {
+                services.RUN_STATUS_QUEUED,
+                services.RUN_STATUS_RUNNING,
+                services.RUN_STATUS_WAITING_FOR_APPROVAL,
+            }
+        )
+        if current_run.get("status") not in allowed_statuses:
             logger.warning(
-                f"Agent run '{run_id}' status is '{current_run.get('status')}', expected 'queued'. Skipping."
+                f"Agent run '{run_id}' status is '{current_run.get('status')}', expected one of {allowed_statuses}. Skipping."
             )
             return {"status": current_run.get("status"), "run_id": run_id}
 
@@ -247,10 +275,27 @@ async def run_agent_loop(
         bounded_messages = raw_messages[-10:] if raw_messages else []
 
         system_prompt = build_system_prompt(tool_registry.list_tools())
+
+        # Load existing run steps from DB to reconstruct turn_steps
+        existing_steps = await services.list_agent_run_steps(user, run_id, db=db)
         turn_steps: List[Dict[str, Any]] = []
+        tool_call_count = 0
+        run_scan_count = 0
+
+        for s in existing_steps:
+            stype = s.get("step_type")
+            inp = s.get("input_data") or {}
+            outp = s.get("output_data") or {}
+            if stype == "tool_call":
+                t_name = inp.get("tool")
+                turn_steps.append({"type": "tool_call", "tool": t_name, "args": inp.get("args")})
+                tool_call_count += 1
+                if t_name == "run_scan":
+                    run_scan_count += 1
+            elif stype == "tool_result":
+                turn_steps.append({"type": "tool_result", "tool": inp.get("tool"), "result": outp})
 
         turn_count = 0
-        tool_call_count = 0
 
         # 3. Agent execution loop
         while turn_count < MAX_CLAUDE_TURNS:
@@ -393,6 +438,10 @@ async def run_agent_loop(
                         db=db,
                     )
 
+                # Deterministic Grounding Verification
+                grounding_res = verify_grounding(final_text, turn_steps)
+                final_text = grounding_res.safe_text
+
                 # Store visible assistant message (NEVER expose thought in message text)
                 msg_id = services.new_id()
                 t_now = services.now_iso()
@@ -404,7 +453,12 @@ async def run_agent_loop(
                     "role": "assistant",
                     "text": final_text,
                     "created_at": t_now,
-                    "metadata": {"run_id": run_id, "thought": thought if thought else None},
+                    "metadata": {
+                        "run_id": run_id,
+                        "thought": thought if thought else None,
+                        "is_grounded": grounding_res.is_grounded,
+                        "violations": grounding_res.violations,
+                    },
                 }
                 active_db = services._get_db(db)
                 await active_db.agent_messages.insert_one(msg_doc)
@@ -469,6 +523,21 @@ async def run_agent_loop(
                 )
                 return {"status": services.RUN_STATUS_FAILED, "error": err_msg}
 
+            # Limit: maximum 1 run_scan per run
+            if tool_name == "run_scan" and run_scan_count >= 1:
+                err_msg = "Agent exceeded maximum limit of 1 'run_scan' invocation per run."
+                await services.update_agent_run(
+                    user,
+                    run_id,
+                    {
+                        "status": services.RUN_STATUS_FAILED,
+                        "error": err_msg,
+                        "completed_at": services.now_iso(),
+                    },
+                    db=db,
+                )
+                return {"status": services.RUN_STATUS_FAILED, "error": err_msg}
+
             # Check cancellation before tool execution
             if is_run_cancelled(run_id):
                 await services.update_agent_run(
@@ -479,7 +548,46 @@ async def run_agent_loop(
                 )
                 return {"status": services.RUN_STATUS_CANCELLED}
 
-            # Record tool call step
+            # 7. Action Tools: require human approval
+            if tool.approval_required:
+                approval = await approvals.create_approval(
+                    user,
+                    run_id=run_id,
+                    thread_id=thread_id,
+                    tool_name=tool_name,
+                    proposed_args=args,
+                    db=db,
+                )
+                await services.create_agent_run_step(
+                    user,
+                    run_id=run_id,
+                    thread_id=thread_id,
+                    step_type="tool_call",
+                    input_data={
+                        "tool": tool_name,
+                        "args": args,
+                        "thought": thought,
+                        "approval_id": approval["id"],
+                    },
+                    status="waiting_for_approval",
+                    db=db,
+                )
+                await services.update_agent_run(
+                    user,
+                    run_id,
+                    {
+                        "status": services.RUN_STATUS_WAITING_FOR_APPROVAL,
+                        "metadata": {"approval_id": approval["id"], "tool": tool_name},
+                    },
+                    db=db,
+                )
+                return {
+                    "status": services.RUN_STATUS_WAITING_FOR_APPROVAL,
+                    "run_id": run_id,
+                    "approval_id": approval["id"],
+                }
+
+            # 8. Read-only tools: execute immediately
             await services.create_agent_run_step(
                 user,
                 run_id=run_id,
@@ -493,6 +601,8 @@ async def run_agent_loop(
             # Execute tool through secure registry interface
             tool_result = await execute_tool(user, tool_name, args, registry=tool_registry, db=db)
             tool_call_count += 1
+            if tool_name == "run_scan":
+                run_scan_count += 1
 
             # Record tool result step
             await services.create_agent_run_step(
@@ -551,3 +661,106 @@ def start_agent_run_background(
         )
     )
     return task
+
+
+async def resume_agent_run(
+    user: AuthedUser,
+    approval_id: str,
+    is_approved: bool,
+    reason: Optional[str] = None,
+    llm_provider: Optional[Any] = None,
+    registry: Optional[Any] = None,
+    db=None,
+) -> Dict[str, Any]:
+    """Resume a paused agent run after approval or rejection."""
+    approval = await approvals.get_approval(user, approval_id, db=db)
+    run_id = approval["run_id"]
+    thread_id = approval["thread_id"]
+    tool_name = approval["tool_name"]
+    proposed_args = approval["proposed_args"]
+
+    tool_registry = registry or default_registry
+
+    if is_approved:
+        # Execute tool with exact proposed arguments and approved flag
+        tool_result = await execute_tool(
+            user,
+            tool_name,
+            proposed_args,
+            registry=tool_registry,
+            db=db,
+            is_approved=True,
+        )
+        await approvals.mark_approval_executed(user, approval_id, db=db)
+        await services.create_agent_run_step(
+            user,
+            run_id=run_id,
+            thread_id=thread_id,
+            step_type="tool_result",
+            input_data={"tool": tool_name, "approval_id": approval_id},
+            output_data=tool_result,
+            status="completed" if tool_result.get("success") else "failed",
+            error=tool_result.get("error"),
+            db=db,
+        )
+    else:
+        rejection_result = {
+            "success": False,
+            "tool": tool_name,
+            "status": "rejected",
+            "error": reason or "Action was rejected by user.",
+            "error_type": "ActionRejected",
+        }
+        await services.create_agent_run_step(
+            user,
+            run_id=run_id,
+            thread_id=thread_id,
+            step_type="tool_result",
+            input_data={"tool": tool_name, "approval_id": approval_id},
+            output_data=rejection_result,
+            status="rejected",
+            error=rejection_result["error"],
+            db=db,
+        )
+
+    # Set run status back to running
+    await services.update_agent_run(
+        user,
+        run_id,
+        {"status": services.RUN_STATUS_RUNNING},
+        db=db,
+    )
+
+    # Continue loop
+    return await run_agent_loop(
+        user,
+        run_id,
+        thread_id,
+        llm_provider=llm_provider,
+        registry=registry,
+        db=db,
+        is_resume=True,
+    )
+
+
+def resume_agent_run_background(
+    user: AuthedUser,
+    approval_id: str,
+    is_approved: bool,
+    reason: Optional[str] = None,
+    llm_provider: Optional[Any] = None,
+    registry: Optional[Any] = None,
+    db=None,
+) -> asyncio.Task:
+    """Schedule resuming a paused agent run in the background."""
+    return asyncio.create_task(
+        resume_agent_run(
+            user,
+            approval_id,
+            is_approved=is_approved,
+            reason=reason,
+            llm_provider=llm_provider,
+            registry=registry,
+            db=db,
+        )
+    )
