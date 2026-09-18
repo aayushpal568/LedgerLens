@@ -118,6 +118,12 @@ class FindingUpdate(BaseModel):
     note: Optional[str] = Field(default=None, max_length=10000)
 
 
+class AgentMessageRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    thread_id: Optional[str] = None
+    text: str
+
+
 # ----------------------------- firm --------------------------------
 @api_router.get("/firm")
 async def get_firm(current_user: AuthedUser = Depends(get_current_user)):
@@ -255,6 +261,28 @@ async def export_report(
         media_type=report["media_type"],
         headers={"Content-Disposition": f"attachment; filename={report['filename']}"},
     )
+
+
+# ----------------------------- agent -------------------------------
+@api_router.post("/agent/messages", status_code=202)
+async def post_agent_message(
+    body: AgentMessageRequest,
+    current_user: AuthedUser = Depends(get_current_user),
+):
+    return await services.post_agent_message(
+        current_user,
+        text=body.text,
+        thread_id=body.thread_id,
+        db=db,
+    )
+
+
+@api_router.get("/agent/runs/{run_id}")
+async def get_agent_run(
+    run_id: str,
+    current_user: AuthedUser = Depends(get_current_user),
+):
+    return await services.get_agent_run(current_user, run_id, db=db)
 
 
 # Public Root Endpoint

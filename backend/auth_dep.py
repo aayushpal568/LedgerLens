@@ -16,6 +16,10 @@ class AuthedUser:
     token_version: int
     email: str = ""
 
+    @property
+    def id(self) -> str:
+        return self.user_id
+
 
 async def get_current_user(
     authorization: Optional[str] = Header(None, alias="Authorization"),

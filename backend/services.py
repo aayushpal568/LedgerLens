@@ -508,3 +508,246 @@ async def export_report(
         "filename": fname,
         "ext": ext,
     }
+
+
+# ----------------------------- Agent Foundation Services -----------------------------
+MAX_AGENT_MESSAGE_LENGTH = 10000
+
+RUN_STATUS_QUEUED = "queued"
+RUN_STATUS_RUNNING = "running"
+RUN_STATUS_COMPLETED = "completed"
+RUN_STATUS_FAILED = "failed"
+RUN_STATUS_CANCELLED = "cancelled"
+
+VALID_RUN_STATUSES = {
+    RUN_STATUS_QUEUED,
+    RUN_STATUS_RUNNING,
+    RUN_STATUS_COMPLETED,
+    RUN_STATUS_FAILED,
+    RUN_STATUS_CANCELLED,
+}
+
+
+async def create_agent_thread(
+    user: AuthedUser,
+    title: Optional[str] = None,
+    metadata: Optional[dict] = None,
+    db=None,
+) -> dict:
+    """Create a new agent thread strictly scoped to the user's firm."""
+    database = _get_db(db)
+    thread_id = new_id()
+    t_now = now_iso()
+    doc = {
+        "id": thread_id,
+        "firm_id": user.firm_id,
+        "title": (title or "New Conversation").strip()[:100],
+        "created_by": user.id,
+        "created_at": t_now,
+        "updated_at": t_now,
+        "metadata": metadata or {},
+    }
+    await database.agent_threads.insert_one(doc)
+    return clean(doc)
+
+
+async def get_agent_thread(user: AuthedUser, thread_id: str, db=None) -> dict:
+    """Retrieve an agent thread ensuring strict tenant isolation."""
+    database = _get_db(db)
+    clean_id = (thread_id or "").strip()
+    if not clean_id:
+        raise HTTPException(400, "thread_id is required")
+    thread = await database.agent_threads.find_one(
+        scoped(database.agent_threads, user, {"id": clean_id}),
+        {"_id": 0},
+    )
+    if not thread:
+        raise HTTPException(404, "Agent thread not found")
+    return thread
+
+
+async def list_agent_messages(user: AuthedUser, thread_id: str, db=None) -> List[dict]:
+    """List all messages in a thread in chronological order."""
+    database = _get_db(db)
+    # Verify thread exists in firm
+    await get_agent_thread(user, thread_id, db=database)
+    return await database.agent_messages.find(
+        scoped(database.agent_messages, user, {"thread_id": thread_id.strip()}),
+        {"_id": 0},
+    ).sort("created_at", 1).to_list(10000)
+
+
+async def post_agent_message(
+    user: AuthedUser,
+    text: str,
+    thread_id: Optional[str] = None,
+    db=None,
+) -> dict:
+    """Validate, record user message, and enqueue an agent run strictly within user's firm.
+
+    Returns HTTP 202 payload with run_id, thread_id, and status.
+    Does NOT invoke LLM loop or tools yet.
+    """
+    database = _get_db(db)
+
+    # 1. Validate message text
+    if not isinstance(text, str) or not text.strip():
+        raise HTTPException(400, "Message text cannot be empty.")
+
+    clean_text = text.strip()
+    if len(clean_text) > MAX_AGENT_MESSAGE_LENGTH:
+        raise HTTPException(
+            400,
+            f"Message text exceeds maximum allowed length of {MAX_AGENT_MESSAGE_LENGTH} characters."
+        )
+
+    t_now = now_iso()
+
+    # 2. Verify or create thread
+    target_thread_id = (thread_id or "").strip()
+    if target_thread_id:
+        thread = await database.agent_threads.find_one(
+            scoped(database.agent_threads, user, {"id": target_thread_id}),
+            {"_id": 0},
+        )
+        if not thread:
+            raise HTTPException(404, "Agent thread not found")
+        await database.agent_threads.update_one(
+            scoped(database.agent_threads, user, {"id": target_thread_id}),
+            {"$set": {"updated_at": t_now}},
+        )
+    else:
+        target_thread_id = new_id()
+        thread_title = clean_text.replace("\n", " ")[:60].strip() or "New Conversation"
+        thread = {
+            "id": target_thread_id,
+            "firm_id": user.firm_id,
+            "title": thread_title,
+            "created_by": user.id,
+            "created_at": t_now,
+            "updated_at": t_now,
+            "metadata": {},
+        }
+        await database.agent_threads.insert_one(thread)
+
+    # 3. Create user message record
+    msg_id = new_id()
+    msg_doc = {
+        "id": msg_id,
+        "firm_id": user.firm_id,
+        "thread_id": target_thread_id,
+        "sender_id": user.id,
+        "role": "user",
+        "text": clean_text,
+        "created_at": t_now,
+        "metadata": {},
+    }
+    await database.agent_messages.insert_one(msg_doc)
+
+    # 4. Create agent run record in queued state
+    run_id = new_id()
+    run_doc = {
+        "id": run_id,
+        "firm_id": user.firm_id,
+        "thread_id": target_thread_id,
+        "status": RUN_STATUS_QUEUED,
+        "created_by": user.id,
+        "created_at": t_now,
+        "updated_at": t_now,
+        "started_at": None,
+        "completed_at": None,
+        "error": None,
+        "metadata": {"initial_message_id": msg_id},
+    }
+    await database.agent_runs.insert_one(run_doc)
+
+    return {
+        "run_id": run_id,
+        "thread_id": target_thread_id,
+        "status": RUN_STATUS_QUEUED,
+        "created_at": t_now,
+    }
+
+
+async def get_agent_run(user: AuthedUser, run_id: str, db=None) -> dict:
+    """Retrieve run metadata strictly scoped to user's firm."""
+    database = _get_db(db)
+    clean_run_id = (run_id or "").strip()
+    if not clean_run_id:
+        raise HTTPException(400, "run_id is required")
+
+    run = await database.agent_runs.find_one(
+        scoped(database.agent_runs, user, {"id": clean_run_id}),
+        {"_id": 0},
+    )
+    if not run:
+        raise HTTPException(404, "Agent run not found")
+    return run
+
+
+async def update_agent_run(
+    user: AuthedUser,
+    run_id: str,
+    update_data: dict,
+    db=None,
+) -> dict:
+    """Update agent run state and metadata (for Step 4 agent loop)."""
+    database = _get_db(db)
+    clean_run_id = (run_id or "").strip()
+    await get_agent_run(user, clean_run_id, db=database)
+
+    status = update_data.get("status")
+    if status is not None and status not in VALID_RUN_STATUSES:
+        raise HTTPException(400, f"Invalid run status: '{status}'. Must be one of {sorted(VALID_RUN_STATUSES)}")
+
+    fields = dict(update_data)
+    fields["updated_at"] = now_iso()
+    await database.agent_runs.update_one(
+        scoped(database.agent_runs, user, {"id": clean_run_id}),
+        {"$set": fields},
+    )
+    return await get_agent_run(user, clean_run_id, db=database)
+
+
+async def create_agent_run_step(
+    user: AuthedUser,
+    run_id: str,
+    thread_id: str,
+    step_type: str,
+    input_data: Optional[dict] = None,
+    output_data: Optional[dict] = None,
+    error: Optional[str] = None,
+    status: str = "completed",
+    db=None,
+) -> dict:
+    """Record an agent execution step (for Step 4 tool/thought persistence)."""
+    database = _get_db(db)
+    await get_agent_run(user, run_id, db=database)
+
+    step_id = new_id()
+    t_now = now_iso()
+    step_doc = {
+        "id": step_id,
+        "firm_id": user.firm_id,
+        "run_id": run_id.strip(),
+        "thread_id": thread_id.strip(),
+        "step_type": step_type.strip(),
+        "status": status,
+        "input_data": input_data or {},
+        "output_data": output_data or {},
+        "error": error,
+        "created_at": t_now,
+        "completed_at": t_now if status in ("completed", "failed") else None,
+    }
+    await database.agent_run_steps.insert_one(step_doc)
+    return clean(step_doc)
+
+
+async def list_agent_run_steps(user: AuthedUser, run_id: str, db=None) -> List[dict]:
+    """List execution steps for an agent run in chronological order."""
+    database = _get_db(db)
+    await get_agent_run(user, run_id, db=database)
+    return await database.agent_run_steps.find(
+        scoped(database.agent_run_steps, user, {"run_id": run_id.strip()}),
+        {"_id": 0},
+    ).sort("created_at", 1).to_list(10000)

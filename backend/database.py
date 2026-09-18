@@ -16,7 +16,19 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 logger = logging.getLogger(__name__)
 
 # Standard collections / tables
-COLLECTIONS = ["firm", "clients", "files", "templates", "scans", "findings", "users"]
+COLLECTIONS = [
+    "firm",
+    "clients",
+    "files",
+    "templates",
+    "scans",
+    "findings",
+    "users",
+    "agent_threads",
+    "agent_messages",
+    "agent_runs",
+    "agent_run_steps",
+]
 
 IMMUTABLE_FIELDS = {"id", "firm_id", "created_at"}
 
@@ -444,6 +456,13 @@ class PostgresDatabase:
                     CREATE INDEX IF NOT EXISTS idx_files_client ON files ((doc->>'client_id'));
                     CREATE INDEX IF NOT EXISTS idx_scans_client ON scans ((doc->>'client_id'));
                     CREATE INDEX IF NOT EXISTS idx_findings_scan ON findings ((doc->>'scan_id'));
+                    CREATE INDEX IF NOT EXISTS idx_agent_threads_firm ON agent_threads ((doc->>'firm_id'));
+                    CREATE INDEX IF NOT EXISTS idx_agent_messages_firm ON agent_messages ((doc->>'firm_id'));
+                    CREATE INDEX IF NOT EXISTS idx_agent_runs_firm ON agent_runs ((doc->>'firm_id'));
+                    CREATE INDEX IF NOT EXISTS idx_agent_run_steps_firm ON agent_run_steps ((doc->>'firm_id'));
+                    CREATE INDEX IF NOT EXISTS idx_agent_messages_thread ON agent_messages ((doc->>'thread_id'));
+                    CREATE INDEX IF NOT EXISTS idx_agent_runs_thread ON agent_runs ((doc->>'thread_id'));
+                    CREATE INDEX IF NOT EXISTS idx_agent_run_steps_run ON agent_run_steps ((doc->>'run_id'));
                 """)
             logger.info(f"Connected to PostgreSQL database at {safe_url}")
         except Exception as e:
