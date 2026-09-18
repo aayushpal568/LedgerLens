@@ -2,11 +2,12 @@ import React from "react";
 import { useApp } from "@/context/AppContext";
 import { cn } from "@/lib/utils";
 import {
-  Building2, Users, FolderSearch, FileCheck2, ShieldAlert, Columns2, FileSpreadsheet, Lock,
+  Building2, Users, FolderSearch, FileCheck2, ShieldAlert, Columns2, FileSpreadsheet, Lock, Sparkles,
 } from "lucide-react";
 
 const NAV = [
   { id: "dashboard", label: "Overview & Firm", icon: Building2 },
+  { id: "agent_chat", label: "LedgerLens AI", icon: Sparkles },
   { id: "clients", label: "Client Directory", icon: Users },
   { id: "scan_workspace", label: "Scan Workspace", icon: FolderSearch },
   { id: "checklists", label: "Checklist Templates", icon: FileCheck2 },

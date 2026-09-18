@@ -13,12 +13,14 @@ import Checklists from "@/pages/Checklists";
 import ReviewCenter from "@/pages/ReviewCenter";
 import FileCompare from "@/pages/FileCompare";
 import Reports from "@/pages/Reports";
+import AgentChat from "@/pages/AgentChat";
 
 function Shell() {
   const { tab } = useApp();
 
   const pages = {
     dashboard: <Overview />,
+    agent_chat: <AgentChat />,
     clients: <Clients />,
     scan_workspace: <ScanWorkspace />,
     checklists: <Checklists />,

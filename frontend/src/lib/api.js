@@ -82,4 +82,15 @@ export const api = {
       params: { format },
       responseType: "arraybuffer",
     }).then((r) => r.data),
+
+  // Agent
+  postAgentMessage: (body) => http.post("/agent/messages", body).then((r) => r.data),
+  getAgentRun: (runId) => http.get(`/agent/runs/${runId}`).then((r) => r.data),
+  cancelAgentRun: (runId) => http.post(`/agent/runs/${runId}/cancel`).then((r) => r.data),
+  listAgentApprovals: (params) => http.get("/agent/approvals", { params }).then((r) => r.data),
+  getAgentApproval: (approvalId) => http.get(`/agent/approvals/${approvalId}`).then((r) => r.data),
+  approveAgentApproval: (approvalId) => http.post(`/agent/approvals/${approvalId}/approve`).then((r) => r.data),
+  rejectAgentApproval: (approvalId, body) => http.post(`/agent/approvals/${approvalId}/reject`, body).then((r) => r.data),
+  listAgentMessages: (threadId) => http.get(`/agent/threads/${threadId}/messages`).then((r) => r.data),
+  listAgentRunSteps: (runId) => http.get(`/agent/runs/${runId}/steps`).then((r) => r.data),
 };

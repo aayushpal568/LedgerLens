@@ -290,6 +290,30 @@ async def get_agent_run(
     return await services.get_agent_run(current_user, run_id, db=db)
 
 
+@api_router.get("/agent/runs/{run_id}/steps")
+async def list_agent_run_steps(
+    run_id: str,
+    current_user: AuthedUser = Depends(get_current_user),
+):
+    steps = await services.list_agent_run_steps(current_user, run_id, db=db)
+    # Hide internal thoughts and ensure safe exposure
+    safe_steps = []
+    for s in steps:
+        stype = s.get("step_type")
+        if stype == "thought":
+            continue
+        safe_steps.append(s)
+    return safe_steps
+
+
+@api_router.get("/agent/threads/{thread_id}/messages")
+async def list_agent_messages(
+    thread_id: str,
+    current_user: AuthedUser = Depends(get_current_user),
+):
+    return await services.list_agent_messages(current_user, thread_id, db=db)
+
+
 @api_router.post("/agent/runs/{run_id}/cancel")
 async def cancel_agent_run(
     run_id: str,

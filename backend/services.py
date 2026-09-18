@@ -704,6 +704,7 @@ async def get_agent_run(user: AuthedUser, run_id: str, db=None) -> dict:
         "started_at": run.get("started_at"),
         "completed_at": run.get("completed_at"),
         "error": run.get("error"),
+        "metadata": run.get("metadata", {}),
     }
 
 
