@@ -19,5 +19,6 @@ def similarity(a: str, b: str) -> float:
         return 0.0
     jaccard = len(ta & tb) / len(ta | tb)
     # cap sequence comparison length for performance on large docs
-    seq = SequenceMatcher(None, a[:5000], b[:5000]).ratio()
+    # autojunk=False ensures repetitive accounting entries (dates, account numbers) are not ignored
+    seq = SequenceMatcher(None, a[:5000], b[:5000], autojunk=False).ratio()
     return round(0.6 * jaccard + 0.4 * seq, 4)

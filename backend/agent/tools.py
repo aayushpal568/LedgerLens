@@ -181,24 +181,33 @@ async def handle_get_findings(user: AuthedUser, args: Dict[str, Any], db=None) -
         status=status.strip() if isinstance(status, str) and status.strip() else None,
         db=db,
     )
-    return [
-        {
+    result = []
+    for f in raw_findings:
+        # Canonical file extraction from files list or explicit keys
+        raw_files = f.get("files") or []
+        file_ids = f.get("file_ids") or [file_info.get("file_id") for file_info in raw_files if isinstance(file_info, dict) and file_info.get("file_id")]
+        filenames = f.get("filenames") or [file_info.get("name") for file_info in raw_files if isinstance(file_info, dict) and file_info.get("name")]
+
+        result.append({
             "id": f["id"],
             "scan_id": f.get("scan_id"),
             "client_id": f.get("client_id"),
             "category": f.get("category"),
             "severity": f.get("severity", "medium"),
+            "confidence": f.get("confidence", 80),
+            "confidence_level": f.get("confidence_level", "medium"),
             "title": f.get("title"),
-            "description": f.get("description"),
-            "file_ids": f.get("file_ids", []),
-            "filenames": f.get("filenames", []),
+            "description": f.get("description") or (f.get("evidence", {}).get("summary") if isinstance(f.get("evidence"), dict) else None),
+            "evidence": f.get("evidence", {}),
+            "file_ids": file_ids,
+            "filenames": filenames,
             "status": f.get("status", "unreviewed"),
-            "review_note": f.get("review_note"),
-            "detected_at": f.get("detected_at"),
+            "note": f.get("note") or f.get("review_note") or "",
+            "review_note": f.get("review_note") or f.get("note") or "",
+            "detected_at": f.get("detected_at") or f.get("created_at"),
             "period": f.get("period"),
-        }
-        for f in raw_findings
-    ]
+        })
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -235,17 +244,24 @@ async def handle_summarize_findings(user: AuthedUser, args: Dict[str, Any], db=N
     for f in findings:
         severity = str(f.get("severity", "")).lower()
         category = str(f.get("category", "")).lower()
-        is_high_severity = severity in ("high", "critical")
+        is_high_severity = severity in ("high", "critical") or f.get("confidence_level") == "high"
         is_key_category = category in ("exact_duplicate", "missing_doc", "wrong_period")
+
+        raw_files = f.get("files") or []
+        file_ids = f.get("file_ids") or [fi.get("file_id") for fi in raw_files if isinstance(fi, dict) and fi.get("file_id")]
+        filenames = f.get("filenames") or [fi.get("name") for fi in raw_files if isinstance(fi, dict) and fi.get("name")]
 
         if is_high_severity or (is_key_category and f.get("status") == "unreviewed"):
             important.append({
                 "id": f["id"],
                 "category": f.get("category"),
                 "severity": f.get("severity", "medium"),
+                "confidence": f.get("confidence", 80),
                 "title": f.get("title"),
                 "status": f.get("status", "unreviewed"),
-                "filenames": f.get("filenames", []),
+                "file_ids": file_ids,
+                "filenames": filenames,
+                "evidence": f.get("evidence", {}),
             })
 
     return {
@@ -254,10 +270,12 @@ async def handle_summarize_findings(user: AuthedUser, args: Dict[str, Any], db=N
         "client_name": scan.get("client_name"),
         "scan_status": scan.get("status"),
         "total": len(findings),
+        "total_findings": len(findings),
         "by_category": dict(category_counter),
         "by_status": dict(status_counter),
         "important_findings": important[:15],
     }
+
 
 
 # ---------------------------------------------------------------------------
@@ -292,8 +310,49 @@ async def handle_get_agent_run_status(user: AuthedUser, args: Dict[str, Any], db
 
 
 # ---------------------------------------------------------------------------
-# 8. run_scan (Action Tool - requires approval)
+# 8. export_report (Read-only tool returning secure download reference)
 # ---------------------------------------------------------------------------
+EXPORT_REPORT_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "scan_id": {
+            "type": "string",
+            "description": "Unique identifier of the completed scan to export.",
+        },
+        "format": {
+            "type": "string",
+            "enum": ["csv", "xlsx", "pdf"],
+            "description": "Export format: 'csv', 'xlsx', or 'pdf'. Defaults to 'csv'.",
+        },
+    },
+    "required": ["scan_id"],
+    "additionalProperties": False,
+}
+
+
+async def handle_export_report(user: AuthedUser, args: Dict[str, Any], db=None) -> Dict[str, Any]:
+    """Generate a formatted report export reference without exposing filesystem paths."""
+    scan_id = str(args["scan_id"]).strip()
+    fmt = str(args.get("format") or "csv").strip().lower()
+    if fmt not in ("csv", "xlsx", "pdf"):
+        fmt = "csv"
+
+    # Calls existing report service; verifies tenant ownership
+    report_res = await services.export_report(user, scan_id=scan_id, format=fmt, db=db)
+    return {
+        "scan_id": scan_id,
+        "format": fmt,
+        "filename": report_res["filename"],
+        "media_type": report_res["media_type"],
+        "download_url": f"/api/scans/{scan_id}/report?format={fmt}",
+        "status": "ready",
+    }
+
+
+# ---------------------------------------------------------------------------
+# 9. run_scan (Action Tool - requires approval)
+# ---------------------------------------------------------------------------
+
 RUN_SCAN_SCHEMA: Dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -488,7 +547,16 @@ READ_ONLY_TOOLS = [
         read_only=True,
         approval_required=False,
     ),
+    Tool(
+        name="export_report",
+        description="Generate a formatted export report (CSV, XLSX, or PDF) for a completed audit scan and return a secure download link.",
+        parameters=EXPORT_REPORT_SCHEMA,
+        handler=handle_export_report,
+        read_only=True,
+        approval_required=False,
+    ),
 ]
+
 
 ACTION_TOOLS = [
     Tool(

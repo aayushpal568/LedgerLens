@@ -28,7 +28,9 @@ async def get_current_user(
 
     Rejects missing, malformed, expired, or revoked tokens with HTTP 401.
     """
-    from server import db
+    import sys
+    server_mod = sys.modules.get("server")
+    db = getattr(server_mod, "db", None) if server_mod else None
 
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(
@@ -72,12 +74,18 @@ async def get_current_user(
         )
 
     if db is None:
+        # Fallback to database.get_database default instance if server.db not set
+        import database
+        db = getattr(database, "_default_db", None)
+
+    if db is None:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Database not initialized",
         )
 
     user = await db.users.find_one({"id": user_id})
+
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

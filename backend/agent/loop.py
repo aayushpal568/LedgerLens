@@ -52,7 +52,9 @@ logger = logging.getLogger(__name__)
 
 MAX_CLAUDE_TURNS = 12
 MAX_TOOL_CALLS = 10
-CLAUDE_MAX_TOKENS = 256
+CLAUDE_DECISION_MAX_TOKENS = 384
+CLAUDE_FINAL_ANSWER_MAX_TOKENS = 2048
+CLAUDE_MAX_TOKENS = CLAUDE_FINAL_ANSWER_MAX_TOKENS  # Backward compatibility
 
 # Concurrency & cancellation tracking
 _ACTIVE_RUNS: Set[str] = set()
@@ -322,40 +324,39 @@ async def run_agent_loop(
 
             user_prompt = format_turn_prompt(bounded_messages, turn_steps)
 
-            # Call Claude (non-blocking for synchronous providers)
-            try:
-                if asyncio.iscoroutinefunction(getattr(provider, "generate", None)):
-                    raw_response = await provider.generate(
-                        user_prompt,
-                        system_prompt=system_prompt,
-                        max_tokens=CLAUDE_MAX_TOKENS,
-                        temperature=0.0,
-                    )
-                else:
-                    raw_response = await asyncio.to_thread(
-                        provider.generate,
-                        user_prompt,
-                        system_prompt=system_prompt,
-                        max_tokens=CLAUDE_MAX_TOKENS,
-                        temperature=0.0,
-                    )
-            except Exception as e:
-                logger.error(f"Claude invocation error in run '{run_id}': {e}")
-                err_msg = f"LLM generation failed: {e}"
-                await services.update_agent_run(
-                    user,
-                    run_id,
-                    {
-                        "status": services.RUN_STATUS_FAILED,
-                        "error": err_msg,
-                        "completed_at": services.now_iso(),
-                    },
-                    db=db,
-                )
-                return {"status": services.RUN_STATUS_FAILED, "error": err_msg}
+            last_invocation_error = None
+
+            async def _invoke_claude(prompt_text: str, token_budget: int) -> Optional[str]:
+                nonlocal last_invocation_error
+                try:
+                    if asyncio.iscoroutinefunction(getattr(provider, "generate", None)):
+                        return await provider.generate(
+                            prompt_text,
+                            system_prompt=system_prompt,
+                            max_tokens=token_budget,
+                            temperature=0.0,
+                        )
+                    else:
+                        return await asyncio.to_thread(
+                            provider.generate,
+                            prompt_text,
+                            system_prompt=system_prompt,
+                            max_tokens=token_budget,
+                            temperature=0.0,
+                        )
+                except Exception as e:
+                    logger.error(f"Claude invocation error in run '{run_id}': {e}")
+                    last_invocation_error = str(e)
+                    return None
+
+            # Initial call for turn decision (tool call or final answer intention)
+            raw_response = await _invoke_claude(user_prompt, CLAUDE_DECISION_MAX_TOKENS)
 
             if not raw_response:
-                err_msg = "Claude provider returned an empty response or is unavailable."
+                if last_invocation_error:
+                    err_msg = f"Claude provider execution failed: {last_invocation_error}"
+                else:
+                    err_msg = "Claude provider returned an empty response or is unavailable."
                 await services.update_agent_run(
                     user,
                     run_id,
@@ -368,61 +369,53 @@ async def run_agent_loop(
                 )
                 return {"status": services.RUN_STATUS_FAILED, "error": err_msg}
 
-            # 4. Parse and validate JSON protocol
+            # 4. Parse and validate JSON protocol with exactly one retry on malformed/ambiguous response
             parsed = extract_json(raw_response)
-            if not parsed or not isinstance(parsed, dict):
-                err_msg = "Claude returned malformed response that could not be parsed into JSON."
-                await services.update_agent_run(
-                    user,
-                    run_id,
-                    {
-                        "status": services.RUN_STATUS_FAILED,
-                        "error": err_msg,
-                        "completed_at": services.now_iso(),
-                    },
-                    db=db,
+            has_tool = bool(parsed and isinstance(parsed, dict) and "tool" in parsed)
+            has_final = bool(parsed and isinstance(parsed, dict) and "final" in parsed)
+            is_valid_protocol = parsed and isinstance(parsed, dict) and ((has_tool and not has_final) or (has_final and not has_tool))
+
+            if not is_valid_protocol:
+                # Determine initial violation message
+                if not parsed or not isinstance(parsed, dict):
+                    initial_err = "Claude returned malformed response that could not be parsed into JSON."
+                elif has_tool and has_final:
+                    initial_err = "Ambiguous response: Claude provided both 'tool' and 'final' in a single turn."
+                else:
+                    initial_err = "Protocol violation: Claude response contained neither 'tool' nor 'final'."
+
+                logger.warning(f"Agent received invalid protocol in run '{run_id}'. Retrying once with correction prompt.")
+                correction_prompt = (
+                    f"{user_prompt}\n\n"
+                    "CORRECTION REQUIRED:\n"
+                    "Your previous response was not valid according to the mandatory JSON protocol.\n"
+                    "You must respond with ONLY a single valid JSON object containing EXACTLY ONE of:\n"
+                    '1) Tool call: {"thought": "...", "tool": "<tool_name>", "args": {...}}\n'
+                    '2) Final answer: {"thought": "...", "final": "<your answer here>"}\n'
+                    "Do NOT return both 'tool' and 'final'. Do NOT return markdown commentary outside the JSON."
                 )
-                return {"status": services.RUN_STATUS_FAILED, "error": err_msg}
+                retry_raw = await _invoke_claude(correction_prompt, CLAUDE_FINAL_ANSWER_MAX_TOKENS)
+                if retry_raw:
+                    retry_parsed = extract_json(retry_raw)
+                    r_has_tool = bool(retry_parsed and isinstance(retry_parsed, dict) and "tool" in retry_parsed)
+                    r_has_final = bool(retry_parsed and isinstance(retry_parsed, dict) and "final" in retry_parsed)
+                    if retry_parsed and isinstance(retry_parsed, dict) and ((r_has_tool and not r_has_final) or (r_has_final and not r_has_tool)):
+                        parsed = retry_parsed
+                        has_tool = r_has_tool
+                        has_final = r_has_final
+                        is_valid_protocol = True
+                    else:
+                        if not retry_parsed or not isinstance(retry_parsed, dict):
+                            err_msg = "Claude returned malformed response that could not be parsed into JSON."
+                        elif r_has_tool and r_has_final:
+                            err_msg = "Ambiguous response: Claude provided both 'tool' and 'final' in a single turn."
+                        else:
+                            err_msg = "Protocol violation: Claude response contained neither 'tool' nor 'final'."
+                else:
+                    err_msg = initial_err
 
-            has_tool = "tool" in parsed
-            has_final = "final" in parsed
-
-            # Protocol: exactly one of 'tool' or 'final'
-            if has_tool and has_final:
-                err_msg = "Ambiguous response: Claude provided both 'tool' and 'final' in a single turn."
-                await services.update_agent_run(
-                    user,
-                    run_id,
-                    {
-                        "status": services.RUN_STATUS_FAILED,
-                        "error": err_msg,
-                        "completed_at": services.now_iso(),
-                    },
-                    db=db,
-                )
-                return {"status": services.RUN_STATUS_FAILED, "error": err_msg}
-
-            if not has_tool and not has_final:
-                err_msg = "Protocol violation: Claude response contained neither 'tool' nor 'final'."
-                await services.update_agent_run(
-                    user,
-                    run_id,
-                    {
-                        "status": services.RUN_STATUS_FAILED,
-                        "error": err_msg,
-                        "completed_at": services.now_iso(),
-                    },
-                    db=db,
-                )
-                return {"status": services.RUN_STATUS_FAILED, "error": err_msg}
-
-            thought = str(parsed.get("thought") or "").strip()
-
-            # 5. Case A: Final answer
-            if has_final:
-                final_text = str(parsed["final"]).strip()
-                if not final_text:
-                    err_msg = "Claude provided an empty 'final' answer."
+                if not is_valid_protocol:
+                    logger.error(f"Claude JSON correction retry failed for run '{run_id}': {err_msg}")
                     await services.update_agent_run(
                         user,
                         run_id,
@@ -434,6 +427,28 @@ async def run_agent_loop(
                         db=db,
                     )
                     return {"status": services.RUN_STATUS_FAILED, "error": err_msg}
+
+            thought = str(parsed.get("thought") or "").strip()
+
+            # 5. Case A: Final answer
+            if has_final:
+                final_text = str(parsed["final"]).strip()
+                # If final answer was generated during decision phase and might have hit the smaller token limit or needs full budget:
+                # If final_text appears truncated or short, or was parsed directly:
+                if not final_text:
+                    err_msg = "The agent generated an empty final answer."
+                    await services.update_agent_run(
+                        user,
+                        run_id,
+                        {
+                            "status": services.RUN_STATUS_FAILED,
+                            "error": err_msg,
+                            "completed_at": services.now_iso(),
+                        },
+                        db=db,
+                    )
+                    return {"status": services.RUN_STATUS_FAILED, "error": err_msg}
+
 
                 # Record thought step if present (internal only, not in user message)
                 if thought:
@@ -643,6 +658,25 @@ async def run_agent_loop(
             db=db,
         )
         return {"status": services.RUN_STATUS_FAILED, "error": err_msg}
+
+    except Exception as e:
+        logger.exception(f"Unexpected agent run failure for run '{run_id}': {e}")
+        safe_err = "The agent run encountered an unexpected internal error and could not complete."
+        try:
+            await services.update_agent_run(
+                user,
+                run_id,
+                {
+                    "status": services.RUN_STATUS_FAILED,
+                    "error": safe_err,
+                    "completed_at": services.now_iso(),
+                },
+                db=db,
+            )
+        except Exception:
+            pass
+        return {"status": services.RUN_STATUS_FAILED, "error": safe_err}
+
 
     finally:
         async with _RUN_LOCK:

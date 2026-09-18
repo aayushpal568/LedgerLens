@@ -91,6 +91,15 @@ class RefreshRequest(BaseModel):
     refresh_token: str = Field(..., min_length=1)
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=8, description="Password must be at least 8 characters")
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -388,3 +397,92 @@ async def me(current_user: AuthedUser = Depends(get_current_user)):
             "settings": firm.get("settings", {}) if firm else {},
         },
     }
+
+
+@auth_router.post("/forgot-password")
+async def forgot_password(body: ForgotPasswordRequest, request: Request):
+    """Generate a secure password reset token valid for 1 hour.
+
+    In production SaaS, this token is dispatched via email. For test/development
+    visibility, the reset_token is included in the response payload.
+    """
+    import hashlib
+    import secrets
+    from server import db
+
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database not initialized")
+
+    email_clean = body.email.lower().strip()
+    user = await db.users.find_one({"email": email_clean})
+
+    raw_token = None
+    if user:
+        raw_token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+        expires_at = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+
+        await db.users.update_one(
+            {"id": user["id"]},
+            {"$set": {
+                "reset_token_hash": token_hash,
+                "reset_token_expires_at": expires_at,
+            }}
+        )
+
+    response = {
+        "message": "If an account with that email exists, password reset instructions have been generated.",
+    }
+    if raw_token and os.environ.get("ENVIRONMENT", "development") != "production":
+        response["reset_token"] = raw_token
+
+    return response
+
+
+@auth_router.post("/reset-password")
+async def reset_password(body: ResetPasswordRequest):
+    """Reset user password with a valid, unexpired reset token and revoke all active sessions."""
+    import hashlib
+    from server import db
+
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database not initialized")
+
+    token_clean = body.token.strip()
+    if not token_clean:
+        raise HTTPException(status_code=400, detail="Reset token is required.")
+
+    token_hash = hashlib.sha256(token_clean.encode("utf-8")).hexdigest()
+    user = await db.users.find_one({"reset_token_hash": token_hash})
+
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token.")
+
+    expires_at_str = user.get("reset_token_expires_at")
+    if not expires_at_str:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token.")
+
+    try:
+        expires_at = datetime.fromisoformat(expires_at_str)
+        if datetime.now(timezone.utc) > expires_at:
+            raise HTTPException(status_code=400, detail="Reset token has expired.")
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token.")
+
+    # Hash new password
+    new_pwd_hash = hash_password(body.new_password)
+    new_token_version = int(user.get("token_version", 1)) + 1
+
+    await db.users.update_one(
+        {"id": user["id"]},
+        {"$set": {
+            "password_hash": new_pwd_hash,
+            "token_version": new_token_version,
+            "reset_token_hash": None,
+            "reset_token_expires_at": None,
+            "refresh_hash": None,
+            "refresh_expires_at": None,
+        }}
+    )
+
+    return {"message": "Password reset successfully. Please log in with your new password."}

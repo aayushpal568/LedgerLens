@@ -27,11 +27,26 @@ except Exception:
 # -----------------------------------------------------------------------------
 # Configuration Validation (Fail-Closed)
 # -----------------------------------------------------------------------------
+INSECURE_PLACEHOLDER_KEYS = {
+    "change-this-to-a-secure-random-secret-key-in-production",
+    "secret",
+    "password",
+    "12345678",
+    "ledgerlens-secret-key",
+}
+
 AUTH_SECRET_KEY = os.environ.get("AUTH_SECRET_KEY", "").strip()
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "development").lower().strip()
+
 if not AUTH_SECRET_KEY:
     config_error_auth = "AUTH_SECRET_KEY environment variable is required but missing or empty."
+elif len(AUTH_SECRET_KEY) < 32:
+    config_error_auth = "AUTH_SECRET_KEY must be at least 32 characters long for cryptographic security."
+elif (ENVIRONMENT == "production" or os.environ.get("DATA_BACKEND", "").lower() == "postgres") and AUTH_SECRET_KEY in INSECURE_PLACEHOLDER_KEYS:
+    config_error_auth = "Security violation: Insecure placeholder AUTH_SECRET_KEY cannot be used in production."
 else:
     config_error_auth = None
+
 
 CORS_ORIGINS_RAW = os.environ.get("CORS_ORIGINS", "").strip()
 if not CORS_ORIGINS_RAW:
@@ -73,6 +88,47 @@ import services
 CANCEL_REQUESTS = services.CANCEL_REQUESTS
 now_iso = services.now_iso
 new_id = services.new_id
+
+from collections import defaultdict
+import threading
+import time
+
+
+class SlidingWindowRateLimiter:
+    """Thread-safe sliding-window rate limiter per tenant key."""
+
+    def __init__(self, max_requests: int, window_seconds: int = 60):
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self._records = defaultdict(list)
+        self._lock = threading.Lock()
+
+    def check_and_record(self, key: str) -> bool:
+        """Returns True if request is allowed, False if throttled."""
+        with self._lock:
+            now = time.time()
+            cutoff = now - self.window_seconds
+            timestamps = [t for t in self._records[key] if t > cutoff]
+            if len(timestamps) >= self.max_requests:
+                self._records[key] = timestamps
+                return False
+            timestamps.append(now)
+            self._records[key] = timestamps
+            return True
+
+
+file_upload_limiter = SlidingWindowRateLimiter(
+    max_requests=int(os.environ.get("RATE_LIMIT_FILES_PER_MIN", "60")),
+    window_seconds=60,
+)
+scan_start_limiter = SlidingWindowRateLimiter(
+    max_requests=int(os.environ.get("RATE_LIMIT_SCANS_PER_MIN", "30")),
+    window_seconds=60,
+)
+agent_msg_limiter = SlidingWindowRateLimiter(
+    max_requests=int(os.environ.get("RATE_LIMIT_MESSAGES_PER_MIN", "60")),
+    window_seconds=60,
+)
 clean = services.clean
 _run_scan = services._run_scan
 _finalize_scan = services._finalize_scan
@@ -172,12 +228,74 @@ MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024  # 50MB
 MAX_BATCH_SIZE_BYTES = 100 * 1024 * 1024  # 100MB
 
 
+def validate_file_content(filename: str, content: bytes) -> str:
+    """Validate file extension, MIME magic signature, and reject executables/disguised binaries.
+
+    Returns the normalized extension string on success, or raises HTTPException(400).
+    """
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if not ext or ext not in SUPPORTED_EXTENSIONS:
+        raise HTTPException(
+            400,
+            f"Unsupported file extension: '.{ext}'. Supported extensions: {sorted(SUPPORTED_EXTENSIONS)}",
+        )
+
+    if not content:
+        raise HTTPException(400, f"File '{filename}' is empty (0 bytes).")
+
+    # 1. Reject binary executables disguised as documents
+    # Windows PE / DOS MZ executable
+    if content.startswith(b"MZ"):
+        raise HTTPException(400, f"Security violation: File '{filename}' appears to be a Windows binary executable.")
+    # Linux / Unix ELF
+    if content.startswith(b"\x7fELF"):
+        raise HTTPException(400, f"Security violation: File '{filename}' appears to be an ELF binary executable.")
+    # Mach-O (macOS)
+    if content.startswith((b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf", b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe")):
+        raise HTTPException(400, f"Security violation: File '{filename}' appears to be a Mach-O binary executable.")
+
+    # 2. Content signature verification per extension
+    if ext == "pdf":
+        if not content.startswith(b"%PDF"):
+            raise HTTPException(400, f"Content mismatch: File '{filename}' has a .pdf extension but lacks a valid PDF header.")
+    elif ext == "png":
+        if not content.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise HTTPException(400, f"Content mismatch: File '{filename}' has a .png extension but lacks a valid PNG header.")
+    elif ext in ("jpg", "jpeg"):
+        if not content.startswith(b"\xff\xd8\xff"):
+            raise HTTPException(400, f"Content mismatch: File '{filename}' has a .jpg/.jpeg extension but lacks a valid JPEG header.")
+    elif ext in ("tiff", "tif"):
+        if not (content.startswith(b"II*\x00") or content.startswith(b"MM\x00*")):
+            raise HTTPException(400, f"Content mismatch: File '{filename}' has a .tiff extension but lacks a valid TIFF header.")
+    elif ext in ("docx", "xlsx"):
+        # Office Open XML files are ZIP archives starting with PK\x03\x04
+        if not content.startswith(b"PK\x03\x04"):
+            raise HTTPException(400, f"Content mismatch: File '{filename}' has a .{ext} extension but lacks a valid ZIP/Office header.")
+    elif ext == "csv":
+        # CSV must be plain text without null bytes or binary control characters
+        sample = content[:4096]
+        if b"\x00" in sample:
+            raise HTTPException(400, f"Content mismatch: File '{filename}' has a .csv extension but contains binary null bytes.")
+        try:
+            sample.decode("utf-8")
+        except UnicodeDecodeError:
+            try:
+                sample.decode("latin-1")
+            except Exception:
+                raise HTTPException(400, f"Content mismatch: File '{filename}' is not valid text for a CSV document.")
+
+    return ext
+
+
 @api_router.post("/clients/{client_id}/files")
 async def upload_files(
     client_id: str,
     files: List[UploadFile] = File(...),
     current_user: AuthedUser = Depends(get_current_user),
 ):
+    if not file_upload_limiter.check_and_record(current_user.firm_id):
+        raise HTTPException(429, "File upload rate limit exceeded. Please wait a moment.")
+
     if not files:
         raise HTTPException(400, "No files uploaded")
     if len(files) > MAX_FILES_PER_BATCH:
@@ -187,12 +305,6 @@ async def upload_files(
     saved = []
     for uf in files:
         fname = os.path.basename(uf.filename or "unnamed")
-        ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
-        if ext not in SUPPORTED_EXTENSIONS:
-            raise HTTPException(
-                400,
-                f"Unsupported file type: '.{ext}'. Supported types: {sorted(SUPPORTED_EXTENSIONS)}",
-            )
 
         chunks = []
         file_size = 0
@@ -209,11 +321,15 @@ async def upload_files(
             chunks.append(chunk)
 
         content = b"".join(chunks)
+        # Validate extension, magic bytes, and reject disguised executables before storage
+        validate_file_content(fname, content)
+
         doc = await services.save_client_file(
             current_user, client_id, fname, content, db=db
         )
         saved.append(doc)
     return {"uploaded": len(saved), "files": saved}
+
 
 
 @api_router.delete("/clients/{client_id}/files/{file_id}")
@@ -254,6 +370,8 @@ async def cancel_scan(scan_id: str, current_user: AuthedUser = Depends(get_curre
 
 @api_router.post("/clients/{client_id}/scan")
 async def start_scan(client_id: str, body: ScanBody, current_user: AuthedUser = Depends(get_current_user)):
+    if not scan_start_limiter.check_and_record(current_user.firm_id):
+        raise HTTPException(429, "Scan creation rate limit exceeded. Please wait a moment.")
     return await services.start_scan(current_user, client_id, body.template_id, body.expected_period, db=db)
 
 
@@ -307,6 +425,19 @@ async def post_agent_message(
     body: AgentMessageRequest,
     current_user: AuthedUser = Depends(get_current_user),
 ):
+    if not agent_msg_limiter.check_and_record(current_user.firm_id):
+        raise HTTPException(429, "Agent message rate limit exceeded. Please wait a moment.")
+
+    # Check per-firm AI quota limit if configured
+    firm = await db.firm.find_one({"id": current_user.firm_id})
+    if firm:
+        settings = firm.get("settings") or {}
+        quota = settings.get("ai_quota_limit")
+        usage = settings.get("ai_usage_count", 0)
+        if quota is not None and usage >= quota:
+            raise HTTPException(429, "Firm AI usage quota exceeded. Contact firm administrator.")
+        await db.firm.update_one({"id": current_user.firm_id}, {"$inc": {"settings.ai_usage_count": 1}})
+
     return await services.post_agent_message(
         current_user,
         text=body.text,
@@ -403,10 +534,37 @@ async def reject_agent_approval(
     return updated
 
 
-# Public Root Endpoint
+# Public Root & Health Endpoints
 @app.get("/")
 async def app_root():
     return {"message": "LedgerLens Cloud Accounting AI API"}
+
+
+@app.get("/healthz")
+async def health_check():
+    """Safe liveness and readiness probe for cloud orchestrators (Kubernetes, Render, Fly.io).
+
+    Does NOT expose database credentials, secrets, or internal server paths.
+    """
+    db_healthy = False
+    if db is not None:
+        try:
+            if hasattr(db, "count_documents"):
+                # Ping database collection without querying confidential data
+                await db.firm.count_documents({})
+                db_healthy = True
+            elif hasattr(db, "users"):
+                await db.users.count_documents({})
+                db_healthy = True
+        except Exception:
+            db_healthy = False
+
+    return {
+        "status": "healthy" if db_healthy else "degraded",
+        "service": "ledgerlens",
+        "database": "connected" if db_healthy else "unreachable",
+    }
+
 
 
 # Mount auth routes (public /api/auth/*) and protected routes (/api/*)
@@ -456,31 +614,38 @@ async def seed_defaults():
         logger.info("Seeded default checklist templates for default firm")
 
     # Reconcile orphaned runs and scans from prior server restarts/deployments
+    # V1 Single-Worker / Multi-Worker Guard: only reconcile runs/scans created prior to this boot
+    # instance (at least 60 seconds old) so a newly started worker does not kill live concurrent runs.
     try:
-        orphaned_runs = await db.agent_runs.find(
+        from datetime import timedelta
+        boot_cutoff = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
+
+        all_active_runs = await db.agent_runs.find(
             {"status": {"$in": ["queued", "running"]}}
         ).to_list(10000)
+        orphaned_runs = [r for r in all_active_runs if (r.get("created_at") or "") < boot_cutoff]
         for r in orphaned_runs:
             await db.agent_runs.update_one(
                 {"id": r["id"]},
                 {"$set": {
                     "status": "failed",
-                    "error": "Server restarted during execution",
+                    "error": "Execution interrupted by server restart",
                     "completed_at": datetime.now(timezone.utc).isoformat(),
                 }},
             )
         if orphaned_runs:
             logger.info("Reconciled %d orphaned agent run(s) as failed", len(orphaned_runs))
 
-        orphaned_scans = await db.scans.find(
+        all_active_scans = await db.scans.find(
             {"status": {"$in": ["queued", "scanning", "cancelling"]}}
         ).to_list(10000)
+        orphaned_scans = [s for s in all_active_scans if (s.get("started_at") or s.get("created_at") or "") < boot_cutoff]
         for s in orphaned_scans:
             await db.scans.update_one(
                 {"id": s["id"]},
                 {"$set": {
                     "status": "error",
-                    "error": "Server restarted during execution",
+                    "error": "Scan interrupted by server restart",
                     "completed_at": datetime.now(timezone.utc).isoformat(),
                 }},
             )
@@ -488,6 +653,7 @@ async def seed_defaults():
             logger.info("Reconciled %d orphaned scan(s) as error", len(orphaned_scans))
     except Exception as e:
         logger.warning("Orphaned run reconciliation skipped: %s", e)
+
 
 
 @app.on_event("shutdown")

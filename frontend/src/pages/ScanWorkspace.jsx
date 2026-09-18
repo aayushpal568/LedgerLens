@@ -74,19 +74,47 @@ export default function ScanWorkspace() {
     if (!activeClient) return toast.error("Select a client first");
     const arr = Array.from(fileList);
     if (!arr.length) return;
+    if (arr.length > 20) return toast.error("Maximum 20 files allowed per upload batch.");
+
+    // Validate supported extensions
+    const invalid = arr.filter((f) => {
+      const ext = f.name.split(".").pop().toLowerCase();
+      return !SUPPORTED.includes(ext);
+    });
+    if (invalid.length > 0) {
+      return toast.error(
+        `Unsupported file(s): ${invalid.map((f) => f.name).join(", ")}. Supported formats: ${SUPPORTED.join(", ")}`
+      );
+    }
+
+    // Check individual file size limit (50MB)
+    const oversized = arr.filter((f) => f.size > 50 * 1024 * 1024);
+    if (oversized.length > 0) {
+      return toast.error(`File(s) exceed 50MB limit: ${oversized.map((f) => f.name).join(", ")}`);
+    }
+
+    // Check total batch size limit (100MB)
+    const totalBatch = arr.reduce((sum, f) => sum + f.size, 0);
+    if (totalBatch > 100 * 1024 * 1024) {
+      return toast.error("Total batch size exceeds 100MB limit.");
+    }
+
     const fd = new FormData();
     arr.forEach((f) => fd.append("files", f));
-    setUploading(true); setUploadPct(0);
+    setUploading(true);
+    setUploadPct(0);
     try {
       const res = await api.uploadFiles(activeClient.id, fd, (e) => {
         if (e.total) setUploadPct(Math.round((e.loaded / e.total) * 100));
       });
       toast.success(`${res.uploaded} file(s) added`);
       await loadFiles(activeClient.id);
-    } catch {
-      toast.error("Upload failed");
+    } catch (err) {
+      const detail = err?.response?.data?.detail;
+      toast.error(typeof detail === "string" ? detail : "Upload failed");
     } finally {
-      setUploading(false); setUploadPct(0);
+      setUploading(false);
+      setUploadPct(0);
     }
   };
 

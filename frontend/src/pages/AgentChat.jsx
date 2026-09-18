@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { api } from "@/lib/api";
 import { useApp } from "@/context/AppContext";
+import { useAuth } from "@/context/AuthContext";
 import { Button, Card, Badge } from "@/components/ui";
 import {
   Bot,
@@ -14,6 +15,8 @@ import {
   ShieldCheck,
   FileSpreadsheet,
   ExternalLink,
+  LogOut,
+  History,
 } from "lucide-react";
 
 const TOOL_STATUS_MAP = {
@@ -36,7 +39,8 @@ const ACTION_TITLE_MAP = {
 };
 
 export default function AgentChat({ initialThreadId = null, initialMessages = [] } = {}) {
-  const { setTab } = useApp?.() || {};
+  const { setTab, setActiveScan } = useApp?.() || {};
+  const { logout } = useAuth?.() || {};
 
   const [messages, setMessages] = useState(initialMessages);
   const [inputText, setInputText] = useState("");
@@ -48,10 +52,20 @@ export default function AgentChat({ initialThreadId = null, initialMessages = []
   const [approvalActionStatus, setApprovalActionStatus] = useState(null);
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState(null);
+  const [savedThreads, setSavedThreads] = useState(() => {
+    try {
+      const raw = localStorage.getItem("ledgerlens_recent_threads");
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  });
 
   const messagesEndRef = useRef(null);
   const pollingRef = useRef(null);
   const isPollingRef = useRef(false);
+  const pollAttemptsRef = useRef(0);
+  const consecutiveErrorsRef = useRef(0);
 
   // Auto-scroll to bottom of messages
   const scrollToBottom = useCallback(() => {
@@ -94,12 +108,30 @@ export default function AgentChat({ initialThreadId = null, initialMessages = []
       return;
     }
 
+    pollAttemptsRef.current = 0;
+    consecutiveErrorsRef.current = 0;
+
     const pollRun = async () => {
       if (isPollingRef.current) return;
       isPollingRef.current = true;
 
+      // Guard: 5-minute polling timeout (300 seconds)
+      pollAttemptsRef.current += 1;
+      if (pollAttemptsRef.current > 300) {
+        if (pollingRef.current) {
+          clearInterval(pollingRef.current);
+          pollingRef.current = null;
+        }
+        setActiveRunId(null);
+        setStatusMessage(null);
+        setError("Agent run polling timed out after 5 minutes. The process may still be running in the background.");
+        isPollingRef.current = false;
+        return;
+      }
+
       try {
         const run = await api.getAgentRun(activeRunId);
+        consecutiveErrorsRef.current = 0;
         const status = run.status;
         setRunStatus(status);
 
@@ -175,6 +207,17 @@ export default function AgentChat({ initialThreadId = null, initialMessages = []
           // Handled by global auth interceptor
           return;
         }
+        consecutiveErrorsRef.current += 1;
+        if (consecutiveErrorsRef.current >= 5) {
+          if (pollingRef.current) {
+            clearInterval(pollingRef.current);
+            pollingRef.current = null;
+          }
+          setActiveRunId(null);
+          setStatusMessage(null);
+          setError("Lost connection to agent service after multiple attempts. Please refresh to check status.");
+          return;
+        }
         setError("Could not update agent status. Will retry...");
       } finally {
         isPollingRef.current = false;
@@ -221,6 +264,15 @@ export default function AgentChat({ initialThreadId = null, initialMessages = []
 
       setThreadId(res.thread_id);
       setActiveRunId(res.run_id);
+      try {
+        const raw = localStorage.getItem("ledgerlens_recent_threads");
+        const list = raw ? JSON.parse(raw) : [];
+        const titleSnippet = text.length > 35 ? `${text.slice(0, 35)}...` : text;
+        const entry = { id: res.thread_id, title: titleSnippet, updatedAt: new Date().toISOString() };
+        const updated = [entry, ...list.filter((t) => t.id !== res.thread_id)].slice(0, 20);
+        localStorage.setItem("ledgerlens_recent_threads", JSON.stringify(updated));
+        setSavedThreads(updated);
+      } catch {}
       setRunStatus("queued");
       setStatusMessage("Agent is starting...");
       setPendingApproval(null);
@@ -340,17 +392,58 @@ export default function AgentChat({ initialThreadId = null, initialMessages = []
           </div>
         </div>
 
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleNewConversation}
-          disabled={isSending}
-          data-testid="new-conversation-btn"
-          className="text-xs gap-1.5"
-        >
-          <RotateCcw className="h-3.5 w-3.5" />
-          New Conversation
-        </Button>
+        <div className="flex items-center gap-2">
+          {savedThreads.length > 0 && (
+            <select
+              aria-label="Previous Conversations"
+              value={threadId || ""}
+              onChange={(e) => {
+                const val = e.target.value;
+                if (!val) {
+                  handleNewConversation();
+                } else {
+                  setThreadId(val);
+                  setActiveRunId(null);
+                  setStatusMessage(null);
+                  setError(null);
+                }
+              }}
+              className="text-xs bg-background border border-border rounded-lg px-2.5 py-1.5 text-foreground max-w-[160px] truncate focus:outline-none focus:ring-1 focus:ring-primary"
+            >
+              <option value="">Switch Conversation</option>
+              {savedThreads.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.title || t.id.slice(0, 8)}
+                </option>
+              ))}
+            </select>
+          )}
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleNewConversation}
+            disabled={isSending}
+            data-testid="new-conversation-btn"
+            className="text-xs gap-1.5"
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            New
+          </Button>
+
+          {logout && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={logout}
+              data-testid="agent-logout-btn"
+              className="text-xs gap-1.5 text-muted-foreground hover:text-foreground"
+            >
+              <LogOut className="h-3.5 w-3.5" />
+              Sign Out
+            </Button>
+          )}
+        </div>
       </header>
 
       {/* Messages Area */}
@@ -436,7 +529,13 @@ export default function AgentChat({ initialThreadId = null, initialMessages = []
                         variant="secondary"
                         size="sm"
                         className="text-xs h-7 gap-1"
-                        onClick={() => setTab("review_center")}
+                        onClick={() => {
+                          const scanMatch = msg.text.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+                          if (scanMatch && setActiveScan) {
+                            setActiveScan({ id: scanMatch[0] });
+                          }
+                          setTab("review_center");
+                        }}
                       >
                         <ShieldCheck className="h-3.5 w-3.5" />
                         View Findings

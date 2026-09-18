@@ -55,9 +55,9 @@ def test_reports_escape_markup_and_spreadsheet_formulas():
 def api_client(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_BACKEND", "memory")
     monkeypatch.setenv("AUTH_SECRET_KEY", "test-secret-key-at-least-32-characters-long")
-    sys.modules.pop("server", None)
-    sys.modules.pop("database", None)
-    server = importlib.import_module("server")
+    import server
+    import database
+    server.db = database.get_database(None, "memory", reset=True)
     with TestClient(server.app) as client:
         # Signup to obtain auth token
         res = client.post("/api/auth/signup", json={
@@ -69,6 +69,7 @@ def api_client(tmp_path, monkeypatch):
         token = res.json()["access_token"]
         client.headers["Authorization"] = f"Bearer {token}"
         yield client, server
+
 
 
 def test_missing_finding_update_returns_404(api_client):

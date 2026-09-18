@@ -710,13 +710,39 @@ class MemoryCollection:
         with self._db._lock:
             col = self._db._data.setdefault(self.name, {})
             target = next((v for v in col.values() if _match(v, filt)), None)
-            # Strip immutable fields from $set
-            set_fields = {k: v for k, v in update.get("$set", {}).items() if k not in IMMUTABLE_FIELDS}
             if target is not None:
-                target.update(set_fields)
+                # Handle $set
+                for k, v in update.get("$set", {}).items():
+                    if k in IMMUTABLE_FIELDS:
+                        continue
+                    if "." in k:
+                        parts = k.split(".")
+                        curr = target
+                        for p in parts[:-1]:
+                            if p not in curr or not isinstance(curr[p], dict):
+                                curr[p] = {}
+                            curr = curr[p]
+                        curr[parts[-1]] = v
+                    else:
+                        target[k] = v
+
+                # Handle $inc
+                for k, v in update.get("$inc", {}).items():
+                    if "." in k:
+                        parts = k.split(".")
+                        curr = target
+                        for p in parts[:-1]:
+                            if p not in curr or not isinstance(curr[p], dict):
+                                curr[p] = {}
+                            curr = curr[p]
+                        curr[parts[-1]] = curr.get(parts[-1], 0) + v
+                    else:
+                        target[k] = target.get(k, 0) + v
+
                 return _UpdateResult(1, 1)
             if upsert:
                 new_doc = {k: v for k, v in filt.items() if not isinstance(v, dict)}
+                set_fields = {k: v for k, v in update.get("$set", {}).items() if k not in IMMUTABLE_FIELDS}
                 new_doc.update(set_fields)
                 if "id" not in new_doc:
                     new_doc["id"] = str(uuid.uuid4())

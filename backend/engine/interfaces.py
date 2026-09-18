@@ -1,9 +1,8 @@
 """Abstract interfaces / ports for the document-processing engine.
 
-Concrete adapters live in `engine.providers`. Keeping these as ABCs means the
-web build (uploaded files, no OCR/LLM) and a future local Windows build
-(real file paths, PaddleOCR, Ollama/Qwen) share one ScanEngine without any
-change to the detection logic.
+Concrete adapters live in `engine.providers`. Keeping these as ABCs ensures the
+engine supports interchangeable storage sources, OCR providers (e.g. Baidu Unlimited-OCR),
+and LLM providers (e.g. Claude Opus) without modifying detection logic.
 """
 from abc import ABC, abstractmethod
 from typing import Any, Iterable, List, Optional
@@ -12,7 +11,7 @@ from .models import FileRef, ExtractionResult
 
 
 class FileSource(ABC):
-    """Where documents come from (uploads today, local Windows folders later)."""
+    """Source of documents to be processed by the engine."""
 
     @abstractmethod
     def list_files(self) -> List[FileRef]:
@@ -20,7 +19,7 @@ class FileSource(ABC):
 
     @abstractmethod
     def open(self, ref: FileRef) -> str:
-        """Return a readable LOCAL filesystem path for the given file.
+        """Return a readable filesystem path for the given file.
 
         May raise (locked/inaccessible) — the ScanEngine will skip safely.
         """
@@ -41,8 +40,8 @@ class DocumentExtractor(ABC):
 class OCRProvider(ABC):
     """Optical character recognition for images / scanned PDFs.
 
-    Default (web) build uses a no-op. The local desktop build can plug in
-    PaddleOCR here without touching the detection engine.
+    Cloud deployment uses Baidu Unlimited-OCR (OpenAI-compatible) when configured,
+    or a graceful no-op when unconfigured.
     """
 
     name: str = "base"
