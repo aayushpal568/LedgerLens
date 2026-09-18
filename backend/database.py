@@ -436,39 +436,44 @@ class PostgresDatabase:
 
         try:
             async with self._pg_pool.acquire() as conn:
-                for col in COLLECTIONS:
-                    await conn.execute(f"""
-                        CREATE TABLE IF NOT EXISTS {col} (
-                            id TEXT PRIMARY KEY,
-                            doc JSONB NOT NULL,
-                            created_at TIMESTAMPTZ DEFAULT NOW(),
-                            updated_at TIMESTAMPTZ DEFAULT NOW()
-                        );
-                        CREATE INDEX IF NOT EXISTS idx_{col}_doc ON {col} USING GIN (doc);
+                # Protect concurrent startup DDL from multi-worker catalog deadlocks
+                await conn.execute("SELECT pg_advisory_lock(7483921);")
+                try:
+                    for col in COLLECTIONS:
+                        await conn.execute(f"""
+                            CREATE TABLE IF NOT EXISTS {col} (
+                                id TEXT PRIMARY KEY,
+                                doc JSONB NOT NULL,
+                                created_at TIMESTAMPTZ DEFAULT NOW(),
+                                updated_at TIMESTAMPTZ DEFAULT NOW()
+                            );
+                            CREATE INDEX IF NOT EXISTS idx_{col}_doc ON {col} USING GIN (doc);
+                        """)
+                    # Tenant isolation and unique email indexes
+                    await conn.execute("""
+                        CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users ((lower(doc->>'email')));
+                        CREATE INDEX IF NOT EXISTS idx_clients_firm ON clients ((doc->>'firm_id'));
+                        CREATE INDEX IF NOT EXISTS idx_files_firm ON files ((doc->>'firm_id'));
+                        CREATE INDEX IF NOT EXISTS idx_templates_firm ON templates ((doc->>'firm_id'));
+                        CREATE INDEX IF NOT EXISTS idx_scans_firm ON scans ((doc->>'firm_id'));
+                        CREATE INDEX IF NOT EXISTS idx_findings_firm ON findings ((doc->>'firm_id'));
+                        CREATE INDEX IF NOT EXISTS idx_files_client ON files ((doc->>'client_id'));
+                        CREATE INDEX IF NOT EXISTS idx_scans_client ON scans ((doc->>'client_id'));
+                        CREATE INDEX IF NOT EXISTS idx_findings_scan ON findings ((doc->>'scan_id'));
+                        CREATE INDEX IF NOT EXISTS idx_agent_threads_firm ON agent_threads ((doc->>'firm_id'));
+                        CREATE INDEX IF NOT EXISTS idx_agent_messages_firm ON agent_messages ((doc->>'firm_id'));
+                        CREATE INDEX IF NOT EXISTS idx_agent_runs_firm ON agent_runs ((doc->>'firm_id'));
+                        CREATE INDEX IF NOT EXISTS idx_agent_run_steps_firm ON agent_run_steps ((doc->>'firm_id'));
+                        CREATE INDEX IF NOT EXISTS idx_agent_messages_thread ON agent_messages ((doc->>'thread_id'));
+                        CREATE INDEX IF NOT EXISTS idx_agent_runs_thread ON agent_runs ((doc->>'thread_id'));
+                        CREATE INDEX IF NOT EXISTS idx_agent_run_steps_run ON agent_run_steps ((doc->>'run_id'));
+                        CREATE INDEX IF NOT EXISTS idx_agent_approvals_firm ON agent_approvals ((doc->>'firm_id'));
+                        CREATE INDEX IF NOT EXISTS idx_agent_approvals_run ON agent_approvals ((doc->>'run_id'));
+                        CREATE INDEX IF NOT EXISTS idx_agent_approvals_status ON agent_approvals ((doc->>'status'));
+                        CREATE INDEX IF NOT EXISTS idx_agent_approvals_thread ON agent_approvals ((doc->>'thread_id'));
                     """)
-                # Tenant isolation and unique email indexes
-                await conn.execute("""
-                    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users ((lower(doc->>'email')));
-                    CREATE INDEX IF NOT EXISTS idx_clients_firm ON clients ((doc->>'firm_id'));
-                    CREATE INDEX IF NOT EXISTS idx_files_firm ON files ((doc->>'firm_id'));
-                    CREATE INDEX IF NOT EXISTS idx_templates_firm ON templates ((doc->>'firm_id'));
-                    CREATE INDEX IF NOT EXISTS idx_scans_firm ON scans ((doc->>'firm_id'));
-                    CREATE INDEX IF NOT EXISTS idx_findings_firm ON findings ((doc->>'firm_id'));
-                    CREATE INDEX IF NOT EXISTS idx_files_client ON files ((doc->>'client_id'));
-                    CREATE INDEX IF NOT EXISTS idx_scans_client ON scans ((doc->>'client_id'));
-                    CREATE INDEX IF NOT EXISTS idx_findings_scan ON findings ((doc->>'scan_id'));
-                    CREATE INDEX IF NOT EXISTS idx_agent_threads_firm ON agent_threads ((doc->>'firm_id'));
-                    CREATE INDEX IF NOT EXISTS idx_agent_messages_firm ON agent_messages ((doc->>'firm_id'));
-                    CREATE INDEX IF NOT EXISTS idx_agent_runs_firm ON agent_runs ((doc->>'firm_id'));
-                    CREATE INDEX IF NOT EXISTS idx_agent_run_steps_firm ON agent_run_steps ((doc->>'firm_id'));
-                    CREATE INDEX IF NOT EXISTS idx_agent_messages_thread ON agent_messages ((doc->>'thread_id'));
-                    CREATE INDEX IF NOT EXISTS idx_agent_runs_thread ON agent_runs ((doc->>'thread_id'));
-                    CREATE INDEX IF NOT EXISTS idx_agent_run_steps_run ON agent_run_steps ((doc->>'run_id'));
-                    CREATE INDEX IF NOT EXISTS idx_agent_approvals_firm ON agent_approvals ((doc->>'firm_id'));
-                    CREATE INDEX IF NOT EXISTS idx_agent_approvals_run ON agent_approvals ((doc->>'run_id'));
-                    CREATE INDEX IF NOT EXISTS idx_agent_approvals_status ON agent_approvals ((doc->>'status'));
-                    CREATE INDEX IF NOT EXISTS idx_agent_approvals_thread ON agent_approvals ((doc->>'thread_id'));
-                """)
+                finally:
+                    await conn.execute("SELECT pg_advisory_unlock(7483921);")
             logger.info(f"Connected to PostgreSQL database at {safe_url}")
         except Exception as e:
             logger.error(f"Failed to initialize PostgreSQL schema: {e}")

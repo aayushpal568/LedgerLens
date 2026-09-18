@@ -10,6 +10,7 @@ Implements /api/auth:
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 import logging
+import os
 import re
 import threading
 import time
@@ -66,7 +67,9 @@ class LoginRateLimiter:
             self._failures.pop(key, None)
 
 
-login_limiter = LoginRateLimiter(max_attempts=5, window_seconds=900)
+LOGIN_MAX_ATTEMPTS = int(os.environ.get("LOGIN_MAX_ATTEMPTS", "5"))
+LOGIN_WINDOW_SECONDS = int(os.environ.get("LOGIN_WINDOW_SECONDS", "900"))
+login_limiter = LoginRateLimiter(max_attempts=LOGIN_MAX_ATTEMPTS, window_seconds=LOGIN_WINDOW_SECONDS)
 
 
 # ---------------------------------------------------------------------------
@@ -93,9 +96,12 @@ class RefreshRequest(BaseModel):
 # ---------------------------------------------------------------------------
 def _client_ip(request: Request) -> str:
     """Extract client IP address safely from request."""
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    trust_proxy = os.environ.get("TRUST_PROXY", "true").lower() in ("true", "1")
+    if trust_proxy:
+        forwarded = request.headers.get("X-Forwarded-For")
+        if forwarded:
+            raw_ip = forwarded.split(",")[0].strip()
+            return raw_ip.split(":")[0].strip() if (":" in raw_ip and not raw_ip.startswith("[")) else raw_ip
     return request.client.host if request.client else "unknown"
 
 

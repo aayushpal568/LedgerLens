@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
-import { api, setAccessToken, setOnUnauthorized } from "@/lib/api";
+import { api, setAccessToken, setRefreshToken, getRefreshToken, setOnUnauthorized } from "@/lib/api";
 
 const AuthContext = createContext(null);
 export const useAuth = () => useContext(AuthContext);
@@ -27,6 +27,9 @@ export function AuthProvider({ children }) {
       if (typeof setAccessToken === "function") {
         setAccessToken(null);
       }
+      if (typeof setRefreshToken === "function") {
+        setRefreshToken(null);
+      }
       setToken(null);
       setUser(null);
       setFirm(null);
@@ -35,11 +38,14 @@ export function AuthProvider({ children }) {
   }, [token]);
 
   useEffect(() => {
-    // When a 401 is received by any API call, clear the in-memory auth state
+    // When a 401 is received and unrefreshable, clear the auth state
     if (typeof setOnUnauthorized === "function") {
       setOnUnauthorized(() => {
         if (typeof setAccessToken === "function") {
           setAccessToken(null);
+        }
+        if (typeof setRefreshToken === "function") {
+          setRefreshToken(null);
         }
         setToken(null);
         setUser(null);
@@ -48,6 +54,38 @@ export function AuthProvider({ children }) {
     }
   }, []);
 
+  // Rehydrate session on initial mount / page reload (F5)
+  useEffect(() => {
+    if (isTest) return;
+    const storedRefresh = typeof getRefreshToken === "function" ? getRefreshToken() : null;
+    if (storedRefresh) {
+      setIsLoading(true);
+      api
+        .refresh({ refresh_token: storedRefresh })
+        .then((data) => {
+          if (typeof setAccessToken === "function") {
+            setAccessToken(data.access_token);
+          }
+          if (typeof setRefreshToken === "function" && data.refresh_token) {
+            setRefreshToken(data.refresh_token);
+          }
+          setToken(data.access_token);
+          setUser(data.user);
+          setFirm(data.firm);
+        })
+        .catch(() => {
+          if (typeof setAccessToken === "function") setAccessToken(null);
+          if (typeof setRefreshToken === "function") setRefreshToken(null);
+          setToken(null);
+          setUser(null);
+          setFirm(null);
+        })
+        .finally(() => {
+          setIsLoading(false);
+        });
+    }
+  }, [isTest]);
+
   const login = useCallback(async (email, password) => {
     setIsLoading(true);
     setError(null);
@@ -55,6 +93,9 @@ export function AuthProvider({ children }) {
       const data = await api.login({ email, password });
       if (typeof setAccessToken === "function") {
         setAccessToken(data.access_token);
+      }
+      if (typeof setRefreshToken === "function" && data.refresh_token) {
+        setRefreshToken(data.refresh_token);
       }
       setToken(data.access_token);
       setUser(data.user);
@@ -82,6 +123,9 @@ export function AuthProvider({ children }) {
       });
       if (typeof setAccessToken === "function") {
         setAccessToken(data.access_token);
+      }
+      if (typeof setRefreshToken === "function" && data.refresh_token) {
+        setRefreshToken(data.refresh_token);
       }
       setToken(data.access_token);
       setUser(data.user);

@@ -301,8 +301,17 @@ async def run_agent_loop(
         while turn_count < MAX_CLAUDE_TURNS:
             turn_count += 1
 
-            # Check cancellation before calling Claude
-            if is_run_cancelled(run_id):
+            # Check cancellation before calling Claude (checks both in-memory set and DB)
+            cancelled = is_run_cancelled(run_id)
+            if not cancelled and db is not None:
+                try:
+                    db_run = await services.get_agent_run(user, run_id, db=db)
+                    if db_run.get("status") == services.RUN_STATUS_CANCELLED:
+                        cancelled = True
+                except Exception:
+                    pass
+
+            if cancelled:
                 await services.update_agent_run(
                     user,
                     run_id,

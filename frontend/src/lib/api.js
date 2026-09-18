@@ -7,6 +7,8 @@ const http = axios.create({ baseURL: API, timeout: 30000 });
 
 let _accessToken = null;
 let _onUnauthorizedCallback = null;
+let _isRefreshing = false;
+let _failedQueue = [];
 
 export const setAccessToken = (token) => {
   _accessToken = token || null;
@@ -14,8 +16,39 @@ export const setAccessToken = (token) => {
 
 export const getAccessToken = () => _accessToken;
 
+export const setRefreshToken = (token) => {
+  try {
+    if (token) {
+      localStorage.setItem("ledgerlens_refresh_token", token);
+    } else {
+      localStorage.removeItem("ledgerlens_refresh_token");
+    }
+  } catch {
+    // localStorage may be unavailable or disabled
+  }
+};
+
+export const getRefreshToken = () => {
+  try {
+    return localStorage.getItem("ledgerlens_refresh_token") || null;
+  } catch {
+    return null;
+  }
+};
+
 export const setOnUnauthorized = (cb) => {
   _onUnauthorizedCallback = cb;
+};
+
+const processQueue = (error, token = null) => {
+  _failedQueue.forEach((prom) => {
+    if (error) {
+      prom.reject(error);
+    } else {
+      prom.resolve(token);
+    }
+  });
+  _failedQueue = [];
 };
 
 http.interceptors.request.use(
@@ -30,10 +63,58 @@ http.interceptors.request.use(
 
 http.interceptors.response.use(
   (response) => response,
-  (error) => {
-    if (error.response && error.response.status === 401) {
-      if (_onUnauthorizedCallback) {
-        _onUnauthorizedCallback();
+  async (error) => {
+    const originalRequest = error.config;
+    if (error.response && error.response.status === 401 && originalRequest && !originalRequest._retry) {
+      const refreshToken = getRefreshToken();
+      if (
+        !refreshToken ||
+        originalRequest.url?.includes("/auth/refresh") ||
+        originalRequest.url?.includes("/auth/login") ||
+        originalRequest.url?.includes("/auth/signup")
+      ) {
+        if (_onUnauthorizedCallback) {
+          _onUnauthorizedCallback();
+        }
+        return Promise.reject(error);
+      }
+
+      if (_isRefreshing) {
+        return new Promise((resolve, reject) => {
+          _failedQueue.push({ resolve, reject });
+        })
+          .then((token) => {
+            originalRequest.headers.Authorization = `Bearer ${token}`;
+            return http(originalRequest);
+          })
+          .catch((err) => Promise.reject(err));
+      }
+
+      originalRequest._retry = true;
+      _isRefreshing = true;
+
+      try {
+        const res = await axios.post(`${API}/auth/refresh`, {
+          refresh_token: refreshToken,
+        });
+        const data = res.data;
+        setAccessToken(data.access_token);
+        if (data.refresh_token) {
+          setRefreshToken(data.refresh_token);
+        }
+        processQueue(null, data.access_token);
+        originalRequest.headers.Authorization = `Bearer ${data.access_token}`;
+        return http(originalRequest);
+      } catch (refreshErr) {
+        processQueue(refreshErr, null);
+        setAccessToken(null);
+        setRefreshToken(null);
+        if (_onUnauthorizedCallback) {
+          _onUnauthorizedCallback();
+        }
+        return Promise.reject(refreshErr);
+      } finally {
+        _isRefreshing = false;
       }
     }
     return Promise.reject(error);

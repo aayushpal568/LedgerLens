@@ -162,8 +162,10 @@ async def save_client_file(
     fid = new_id()
     original = os.path.basename(filename or "unnamed")
     ext = original.rsplit(".", 1)[-1].lower() if "." in original else ""
+    if ext not in SUPPORTED_EXTENSIONS:
+        raise HTTPException(400, f"Unsupported file extension: '.{ext}'. Supported types: {sorted(SUPPORTED_EXTENSIONS)}")
     object_path = f"{storage.APP_NAME}/uploads/{user.firm_id}/{client_id}/{fid}.{ext or 'bin'}"
-    result = storage.put_object(object_path, content, storage.mime_for(ext))
+    result = await asyncio.to_thread(storage.put_object, object_path, content, storage.mime_for(ext))
 
     doc = {
         "id": fid,
@@ -172,7 +174,7 @@ async def save_client_file(
         "name": original,
         "ext": ext,
         "size": result.get("size", len(content)),
-        "supported": ext in SUPPORTED_EXTENSIONS,
+        "supported": True,
         "storage_path": result["path"],
         "is_deleted": False,
         "uploaded_at": now_iso(),
@@ -191,7 +193,7 @@ async def delete_file(user: AuthedUser, client_id: str, file_id: str, db=None) -
         raise HTTPException(404, "File not found")
     sp = file_doc.get("storage_path")
     if sp:
-        storage.delete_object(sp)
+        await asyncio.to_thread(storage.delete_object, sp)
     await database.files.delete_one(filt)
     return {"ok": True}
 
@@ -245,6 +247,12 @@ def _make_progress(scan_id: str, firm_id: str, loop, db):
     state = {"skipped": []}
 
     async def _push(processed, pct, skipped):
+        try:
+            doc = await db.scans.find_one({"id": scan_id, "firm_id": firm_id}, {"status": 1})
+            if doc and doc.get("status") in ("cancelling", "cancelled"):
+                CANCEL_REQUESTS.add(scan_id)
+        except Exception:
+            pass
         await db.scans.update_one(
             {"id": scan_id, "firm_id": firm_id},
             {"$set": {"processed_files": processed, "progress": pct, "skipped_files": skipped}},

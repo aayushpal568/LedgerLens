@@ -167,17 +167,50 @@ async def list_files(client_id: str, current_user: AuthedUser = Depends(get_curr
     return await services.list_files(current_user, client_id, db=db)
 
 
+MAX_FILES_PER_BATCH = 20
+MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024  # 50MB
+MAX_BATCH_SIZE_BYTES = 100 * 1024 * 1024  # 100MB
+
+
 @api_router.post("/clients/{client_id}/files")
 async def upload_files(
     client_id: str,
     files: List[UploadFile] = File(...),
     current_user: AuthedUser = Depends(get_current_user),
 ):
+    if not files:
+        raise HTTPException(400, "No files uploaded")
+    if len(files) > MAX_FILES_PER_BATCH:
+        raise HTTPException(400, f"Maximum {MAX_FILES_PER_BATCH} files allowed per upload batch.")
+
+    total_batch_size = 0
     saved = []
     for uf in files:
-        content = await uf.read()
+        fname = os.path.basename(uf.filename or "unnamed")
+        ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
+        if ext not in SUPPORTED_EXTENSIONS:
+            raise HTTPException(
+                400,
+                f"Unsupported file type: '.{ext}'. Supported types: {sorted(SUPPORTED_EXTENSIONS)}",
+            )
+
+        chunks = []
+        file_size = 0
+        while True:
+            chunk = await uf.read(1024 * 1024)
+            if not chunk:
+                break
+            file_size += len(chunk)
+            total_batch_size += len(chunk)
+            if file_size > MAX_FILE_SIZE_BYTES:
+                raise HTTPException(413, f"File '{fname}' exceeds maximum allowed size of 50MB.")
+            if total_batch_size > MAX_BATCH_SIZE_BYTES:
+                raise HTTPException(413, "Total upload batch exceeds maximum allowed size of 100MB.")
+            chunks.append(chunk)
+
+        content = b"".join(chunks)
         doc = await services.save_client_file(
-            current_user, client_id, uf.filename or "unnamed", content, db=db
+            current_user, client_id, fname, content, db=db
         )
         saved.append(doc)
     return {"uploaded": len(saved), "files": saved}
@@ -421,6 +454,40 @@ async def seed_defaults():
                 **tpl,
             })
         logger.info("Seeded default checklist templates for default firm")
+
+    # Reconcile orphaned runs and scans from prior server restarts/deployments
+    try:
+        orphaned_runs = await db.agent_runs.find(
+            {"status": {"$in": ["queued", "running"]}}
+        ).to_list(10000)
+        for r in orphaned_runs:
+            await db.agent_runs.update_one(
+                {"id": r["id"]},
+                {"$set": {
+                    "status": "failed",
+                    "error": "Server restarted during execution",
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                }},
+            )
+        if orphaned_runs:
+            logger.info("Reconciled %d orphaned agent run(s) as failed", len(orphaned_runs))
+
+        orphaned_scans = await db.scans.find(
+            {"status": {"$in": ["queued", "scanning", "cancelling"]}}
+        ).to_list(10000)
+        for s in orphaned_scans:
+            await db.scans.update_one(
+                {"id": s["id"]},
+                {"$set": {
+                    "status": "error",
+                    "error": "Server restarted during execution",
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                }},
+            )
+        if orphaned_scans:
+            logger.info("Reconciled %d orphaned scan(s) as error", len(orphaned_scans))
+    except Exception as e:
+        logger.warning("Orphaned run reconciliation skipped: %s", e)
 
 
 @app.on_event("shutdown")
