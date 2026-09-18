@@ -1,7 +1,9 @@
 import React from "react";
 import "@/App.css";
 import { Toaster } from "sonner";
+import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { AppProvider, useApp } from "@/context/AppContext";
+import AuthScreen from "@/components/AuthScreen";
 import Titlebar from "@/components/Titlebar";
 import Sidebar from "@/components/Sidebar";
 import Overview from "@/pages/Overview";
@@ -11,6 +13,7 @@ import Checklists from "@/pages/Checklists";
 import ReviewCenter from "@/pages/ReviewCenter";
 import FileCompare from "@/pages/FileCompare";
 import Reports from "@/pages/Reports";
+
 function Shell() {
   const { tab } = useApp();
 
@@ -36,13 +39,27 @@ function Shell() {
   );
 }
 
+function AppContent() {
+  const { isAuthenticated } = useAuth();
+
+  if (!isAuthenticated) {
+    return <AuthScreen />;
+  }
+
+  return (
+    <AppProvider>
+      <Shell />
+      <Toaster position="bottom-right" richColors closeButton />
+    </AppProvider>
+  );
+}
+
 export default function App() {
   return (
     <div className="App">
-      <AppProvider>
-        <Shell />
-        <Toaster position="bottom-right" richColors closeButton />
-      </AppProvider>
+      <AuthProvider>
+        <AppContent />
+      </AuthProvider>
     </div>
   );
 }

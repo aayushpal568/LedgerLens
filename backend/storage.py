@@ -82,6 +82,29 @@ def get_object(path: str) -> bytes:
     return resp.content
 
 
+def delete_object(path: str) -> bool:
+    """Delete an object from local or emergent object storage.
+
+    Returns True if deleted or already non-existent, False on failure.
+    """
+    key = init_storage()
+    if _use_local_fallback or key == "local":
+        target = LOCAL_DIR / path
+        if target.exists():
+            try:
+                target.unlink()
+                return True
+            except Exception:
+                return False
+        return True
+
+    try:
+        resp = requests.delete(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=30)
+        return resp.status_code in (200, 204, 404)
+    except Exception:
+        return False
+
+
 
 MIME_TYPES = {
     "pdf": "application/pdf", "jpg": "image/jpeg", "jpeg": "image/jpeg",

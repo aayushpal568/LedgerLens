@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException, Request
+from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException, Request, Depends
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, ConfigDict
 from starlette.middleware.cors import CORSMiddleware
@@ -24,13 +24,30 @@ try:
 except Exception:
     pass
 
-# Production Data Backend: PostgreSQL (configurable via DATABASE_URL)
+# -----------------------------------------------------------------------------
+# Configuration Validation (Fail-Closed)
+# -----------------------------------------------------------------------------
+AUTH_SECRET_KEY = os.environ.get("AUTH_SECRET_KEY", "").strip()
+if not AUTH_SECRET_KEY:
+    config_error_auth = "AUTH_SECRET_KEY environment variable is required but missing or empty."
+else:
+    config_error_auth = None
+
+CORS_ORIGINS_RAW = os.environ.get("CORS_ORIGINS", "").strip()
+if not CORS_ORIGINS_RAW:
+    config_error_cors = "CORS_ORIGINS environment variable is required (e.g. http://localhost:3000)."
+elif "*" in [o.strip() for o in CORS_ORIGINS_RAW.split(",")]:
+    config_error_cors = "CORS_ORIGINS cannot contain wildcard '*' when credentials are enabled."
+else:
+    config_error_cors = None
+    CORS_ALLOWED_ORIGINS = [o.strip() for o in CORS_ORIGINS_RAW.split(",") if o.strip()]
+
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 DATA_BACKEND = os.environ.get("DATA_BACKEND", "postgres").lower().strip()
 
 from database import get_database
 
-config_error: Optional[str] = None
+config_error: Optional[str] = config_error_auth or config_error_cors
 try:
     db = get_database(DATABASE_URL or None, DATA_BACKEND, reset=True)
 except Exception as e:
@@ -38,15 +55,19 @@ except Exception as e:
     db = None
 
 
-app = FastAPI(title="LedgerLens Cloud Accounting AI API")
-api_router = APIRouter(prefix="/api")
+from auth_dep import AuthedUser, get_current_user
+from db_access import scoped
+from auth_routes import auth_router
 
+app = FastAPI(title="LedgerLens Cloud Accounting AI API")
+
+# Protected API Router: all routes strictly require authentication
+api_router = APIRouter(prefix="/api", dependencies=[Depends(get_current_user)])
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# In-memory set of scan ids the user asked to cancel (single-process app).
 CANCEL_REQUESTS: set = set()
 
 
@@ -104,13 +125,13 @@ class FindingUpdate(BaseModel):
 
 # ----------------------------- firm --------------------------------
 @api_router.get("/firm")
-async def get_firm():
-    doc = await db.firm.find_one({"id": "firm"})
+async def get_firm(current_user: AuthedUser = Depends(get_current_user)):
+    doc = await db.firm.find_one({"id": current_user.firm_id})
     if not doc:
         doc = {
-            "id": "firm",
-            "name": "",
-            "contact_email": "",
+            "id": current_user.firm_id,
+            "name": "My Firm",
+            "contact_email": current_user.email,
             "retention_note": "Documents are securely processed in isolated cloud environments.",
             "settings": {"privacy_mode": True},
             "created_at": now_iso(),
@@ -120,29 +141,33 @@ async def get_firm():
 
 
 @api_router.put("/firm")
-async def update_firm(body: FirmUpdate):
+async def update_firm(body: FirmUpdate, current_user: AuthedUser = Depends(get_current_user)):
     update = {k: v for k, v in body.model_dump().items() if v is not None}
     update["updated_at"] = now_iso()
-    await db.firm.update_one({"id": "firm"}, {"$set": update}, upsert=True)
-    doc = await db.firm.find_one({"id": "firm"})
+    await db.firm.update_one({"id": current_user.firm_id}, {"$set": update}, upsert=True)
+    doc = await db.firm.find_one({"id": current_user.firm_id})
     return clean(doc)
 
 
 # ---------------------------- clients ------------------------------
 @api_router.get("/clients")
-async def list_clients():
-    clients = await db.clients.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+async def list_clients(current_user: AuthedUser = Depends(get_current_user)):
+    filt = scoped(db.clients, current_user, {})
+    clients = await db.clients.find(filt, {"_id": 0}).sort("created_at", -1).to_list(1000)
     for c in clients:
-        c["file_count"] = await db.files.count_documents({"client_id": c["id"]})
-        last = await db.scans.find_one({"client_id": c["id"]}, {"_id": 0}, sort=[("started_at", -1)])
+        c_filt = scoped(db.files, current_user, {"client_id": c["id"], "is_deleted": {"$ne": True}})
+        c["file_count"] = await db.files.count_documents(c_filt)
+        last_scan_filt = scoped(db.scans, current_user, {"client_id": c["id"]})
+        last = await db.scans.find_one(last_scan_filt, {"_id": 0}, sort=[("started_at", -1)])
         c["last_scan"] = last
     return clients
 
 
 @api_router.post("/clients")
-async def create_client(body: ClientCreate):
+async def create_client(body: ClientCreate, current_user: AuthedUser = Depends(get_current_user)):
     doc = {
         "id": new_id(),
+        "firm_id": current_user.firm_id,
         "name": body.name,
         "client_type": body.client_type,
         "notes": body.notes or "",
@@ -153,40 +178,42 @@ async def create_client(body: ClientCreate):
 
 
 @api_router.get("/clients/{client_id}")
-async def get_client(client_id: str):
-    doc = await db.clients.find_one({"id": client_id}, {"_id": 0})
+async def get_client(client_id: str, current_user: AuthedUser = Depends(get_current_user)):
+    filt = scoped(db.clients, current_user, {"id": client_id})
+    doc = await db.clients.find_one(filt, {"_id": 0})
     if not doc:
         raise HTTPException(404, "Client not found")
     return doc
 
 
 @api_router.delete("/clients/{client_id}")
-async def delete_client(client_id: str):
-    if hasattr(db, "delete_client_cascade"):
-        await db.delete_client_cascade(client_id)
-    else:
-        await db.clients.delete_one({"id": client_id})
-        await db.files.delete_many({"client_id": client_id})
-        scans = await db.scans.find({"client_id": client_id}, {"id": 1}).to_list(1000)
-        for s in scans:
-            await db.findings.delete_many({"scan_id": s["id"]})
-        await db.scans.delete_many({"client_id": client_id})
+async def delete_client(client_id: str, current_user: AuthedUser = Depends(get_current_user)):
+    client = await db.clients.find_one(scoped(db.clients, current_user, {"id": client_id}))
+    if not client:
+        raise HTTPException(404, "Client not found")
+    await db.delete_client_cascade(client_id, firm_id=current_user.firm_id)
     return {"ok": True}
 
 
 # ----------------------------- files -------------------------------
 @api_router.get("/clients/{client_id}/files")
-async def list_files(client_id: str):
-    files = await db.files.find(
-        {"client_id": client_id, "is_deleted": {"$ne": True}},
-        {"_id": 0, "storage_path": 0},
-    ).sort("uploaded_at", -1).to_list(100000)
+async def list_files(client_id: str, current_user: AuthedUser = Depends(get_current_user)):
+    client = await db.clients.find_one(scoped(db.clients, current_user, {"id": client_id}))
+    if not client:
+        raise HTTPException(404, "Client not found")
+    filt = scoped(db.files, current_user, {"client_id": client_id, "is_deleted": {"$ne": True}})
+    files = await db.files.find(filt, {"_id": 0, "storage_path": 0}).sort("uploaded_at", -1).to_list(100000)
     return files
 
 
 @api_router.post("/clients/{client_id}/files")
-async def upload_files(client_id: str, files: List[UploadFile] = File(...)):
-    if not await db.clients.find_one({"id": client_id}):
+async def upload_files(
+    client_id: str,
+    files: List[UploadFile] = File(...),
+    current_user: AuthedUser = Depends(get_current_user),
+):
+    client = await db.clients.find_one(scoped(db.clients, current_user, {"id": client_id}))
+    if not client:
         raise HTTPException(404, "Client not found")
     saved = []
     for uf in files:
@@ -194,10 +221,12 @@ async def upload_files(client_id: str, files: List[UploadFile] = File(...)):
         original = os.path.basename(uf.filename or "unnamed")
         ext = original.rsplit(".", 1)[-1].lower() if "." in original else ""
         content = await uf.read()
-        object_path = f"{storage.APP_NAME}/uploads/{client_id}/{fid}.{ext or 'bin'}"
+        # Tenant partitioned storage key
+        object_path = f"{storage.APP_NAME}/uploads/{current_user.firm_id}/{client_id}/{fid}.{ext or 'bin'}"
         result = storage.put_object(object_path, content, storage.mime_for(ext))
         doc = {
             "id": fid,
+            "firm_id": current_user.firm_id,
             "client_id": client_id,
             "name": original,
             "ext": ext,
@@ -214,44 +243,69 @@ async def upload_files(client_id: str, files: List[UploadFile] = File(...)):
 
 
 @api_router.delete("/clients/{client_id}/files/{file_id}")
-async def delete_file(client_id: str, file_id: str):
-    await db.files.update_one({"id": file_id}, {"$set": {"is_deleted": True}})
+async def delete_file(client_id: str, file_id: str, current_user: AuthedUser = Depends(get_current_user)):
+    filt = scoped(db.files, current_user, {"id": file_id, "client_id": client_id})
+    file_doc = await db.files.find_one(filt)
+    if not file_doc:
+        raise HTTPException(404, "File not found")
+    sp = file_doc.get("storage_path")
+    if sp:
+        storage.delete_object(sp)
+    await db.files.delete_one(filt)
     return {"ok": True}
 
 
 # -------------------------- checklists -----------------------------
 @api_router.get("/checklist-templates")
-async def list_templates():
-    return await db.templates.find({}, {"_id": 0}).sort("name", 1).to_list(1000)
+async def list_templates(current_user: AuthedUser = Depends(get_current_user)):
+    filt = scoped(db.templates, current_user, {})
+    return await db.templates.find(filt, {"_id": 0}).sort("name", 1).to_list(1000)
 
 
 @api_router.post("/checklist-templates")
-async def create_template(body: TemplateBody):
-    doc = {"id": new_id(), "created_at": now_iso(), **body.model_dump()}
+async def create_template(body: TemplateBody, current_user: AuthedUser = Depends(get_current_user)):
+    doc = {
+        "id": new_id(),
+        "firm_id": current_user.firm_id,
+        "created_at": now_iso(),
+        **body.model_dump(),
+    }
     await db.templates.insert_one(dict(doc))
     return clean(doc)
 
 
 @api_router.put("/checklist-templates/{template_id}")
-async def update_template(template_id: str, body: TemplateBody):
-    await db.templates.update_one({"id": template_id}, {"$set": body.model_dump()})
-    return await db.templates.find_one({"id": template_id}, {"_id": 0})
+async def update_template(
+    template_id: str,
+    body: TemplateBody,
+    current_user: AuthedUser = Depends(get_current_user),
+):
+    filt = scoped(db.templates, current_user, {"id": template_id})
+    existing = await db.templates.find_one(filt)
+    if not existing:
+        raise HTTPException(404, "Template not found")
+    await db.templates.update_one(filt, {"$set": body.model_dump()})
+    return await db.templates.find_one(filt, {"_id": 0})
 
 
 @api_router.delete("/checklist-templates/{template_id}")
-async def delete_template(template_id: str):
-    await db.templates.delete_one({"id": template_id})
+async def delete_template(template_id: str, current_user: AuthedUser = Depends(get_current_user)):
+    filt = scoped(db.templates, current_user, {"id": template_id})
+    existing = await db.templates.find_one(filt)
+    if not existing:
+        raise HTTPException(404, "Template not found")
+    await db.templates.delete_one(filt)
     return {"ok": True}
 
 
 # ------------------------------ scan -------------------------------
-def _make_progress(scan_id: str, loop):
+def _make_progress(scan_id: str, firm_id: str, loop):
     """Build a thread-safe on_progress callback that streams progress to the DB."""
     state = {"skipped": []}
 
     async def _push(processed, pct, skipped):
         await db.scans.update_one(
-            {"id": scan_id},
+            {"id": scan_id, "firm_id": firm_id},
             {"$set": {"processed_files": processed, "progress": pct, "skipped_files": skipped}},
         )
 
@@ -264,13 +318,13 @@ def _make_progress(scan_id: str, loop):
     return on_progress
 
 
-async def _finalize_scan(scan_id: str, client_id: str, result: dict):
+async def _finalize_scan(scan_id: str, firm_id: str, client_id: str, result: dict):
     """Persist findings + mark the scan cancelled/completed. Shared by both runners."""
     file_states = result.get("file_states") or {}
     if result.get("cancelled"):
         CANCEL_REQUESTS.discard(scan_id)
         await db.scans.update_one(
-            {"id": scan_id},
+            {"id": scan_id, "firm_id": firm_id},
             {"$set": {
                 "status": "cancelled",
                 "processed_files": result["processed"],
@@ -286,11 +340,18 @@ async def _finalize_scan(scan_id: str, client_id: str, result: dict):
     finding_docs = []
     for fnd in result["findings"]:
         finding_docs.append({
-            "id": new_id(), "scan_id": scan_id, "client_id": client_id,
-            "status": "unreviewed", "note": "", "created_at": now_iso(), **fnd,
+            "id": new_id(),
+            "firm_id": firm_id,
+            "scan_id": scan_id,
+            "client_id": client_id,
+            "status": "unreviewed",
+            "note": "",
+            "created_at": now_iso(),
+            **fnd,
         })
     scan_update = {
-        "status": "completed", "progress": 100,
+        "status": "completed",
+        "progress": 100,
         "processed_files": result["processed"],
         "total_files": result["total"],
         "counts": result["counts"],
@@ -304,22 +365,23 @@ async def _finalize_scan(scan_id: str, client_id: str, result: dict):
     else:
         if finding_docs:
             await db.findings.insert_many([dict(d) for d in finding_docs])
-        await db.scans.update_one({"id": scan_id}, {"$set": scan_update})
+        await db.scans.update_one({"id": scan_id, "firm_id": firm_id}, {"$set": scan_update})
 
 
-
-async def _load_items(template_id: Optional[str]):
+async def _load_items(template_id: Optional[str], firm_id: str):
     if not template_id:
         return []
-    template = await db.templates.find_one({"id": template_id}, {"_id": 0})
+    template = await db.templates.find_one({"id": template_id, "firm_id": firm_id}, {"_id": 0})
     return template["items"] if template else []
 
 
-async def _run_scan(scan_id: str, client_id: str, template_id: Optional[str], expected_period: Optional[int]):
+async def _run_scan(scan_id: str, firm_id: str, client_id: str, template_id: Optional[str], expected_period: Optional[int]):
     """Web build: files come from object storage, downloaded to a temp dir."""
     tmpdir = tempfile.mkdtemp(prefix="scan_")
     try:
-        file_docs = await db.files.find({"client_id": client_id, "is_deleted": {"$ne": True}}).to_list(100000)
+        file_docs = await db.files.find(
+            {"client_id": client_id, "firm_id": firm_id, "is_deleted": {"$ne": True}}
+        ).to_list(100000)
         records = []
         for f in file_docs:
             local_path = os.path.join(tmpdir, f"{f['id']}.{f.get('ext') or 'bin'}")
@@ -327,24 +389,24 @@ async def _run_scan(scan_id: str, client_id: str, template_id: Optional[str], ex
                 data = await asyncio.to_thread(storage.get_object, f["storage_path"])
                 with open(local_path, "wb") as out:
                     out.write(data)
-            except Exception:  # noqa: BLE001 - treated as inaccessible, engine will skip
+            except Exception:  # noqa: BLE001
                 pass
             records.append({"id": f["id"], "name": f["name"], "ext": f["ext"], "size": f["size"], "path": local_path})
 
-        items = await _load_items(template_id)
+        items = await _load_items(template_id, firm_id)
         await db.scans.update_one(
-            {"id": scan_id},
+            {"id": scan_id, "firm_id": firm_id},
             {"$set": {"status": "scanning", "total_files": len(records), "processed_files": 0, "progress": 0}},
         )
-        on_progress = _make_progress(scan_id, asyncio.get_event_loop())
+        on_progress = _make_progress(scan_id, firm_id, asyncio.get_event_loop())
         result = await asyncio.to_thread(
             run_detection, records, items, expected_period, on_progress,
             lambda: scan_id in CANCEL_REQUESTS,
         )
-        await _finalize_scan(scan_id, client_id, result)
+        await _finalize_scan(scan_id, firm_id, client_id, result)
     except Exception as e:  # noqa: BLE001
         logger.exception("scan failed")
-        await db.scans.update_one({"id": scan_id}, {"$set": {"status": "error", "error": str(e)}})
+        await db.scans.update_one({"id": scan_id, "firm_id": firm_id}, {"$set": {"status": "error", "error": str(e)}})
     finally:
         CANCEL_REQUESTS.discard(scan_id)
         import shutil as _shutil
@@ -352,24 +414,29 @@ async def _run_scan(scan_id: str, client_id: str, template_id: Optional[str], ex
 
 
 @api_router.post("/scans/{scan_id}/cancel")
-async def cancel_scan(scan_id: str):
-    scan = await db.scans.find_one({"id": scan_id}, {"_id": 0})
+async def cancel_scan(scan_id: str, current_user: AuthedUser = Depends(get_current_user)):
+    scan = await db.scans.find_one(scoped(db.scans, current_user, {"id": scan_id}), {"_id": 0})
     if not scan:
         raise HTTPException(404, "Scan not found")
     if scan["status"] in ("queued", "scanning"):
         CANCEL_REQUESTS.add(scan_id)
-        await db.scans.update_one({"id": scan_id}, {"$set": {"status": "cancelling"}})
+        await db.scans.update_one(scoped(db.scans, current_user, {"id": scan_id}), {"$set": {"status": "cancelling"}})
         return {"ok": True, "status": "cancelling"}
     return {"ok": False, "status": scan["status"]}
 
 
 @api_router.post("/clients/{client_id}/scan")
-async def start_scan(client_id: str, body: ScanBody):
-    c = await db.clients.find_one({"id": client_id})
+async def start_scan(client_id: str, body: ScanBody, current_user: AuthedUser = Depends(get_current_user)):
+    c = await db.clients.find_one(scoped(db.clients, current_user, {"id": client_id}))
     if not c:
         raise HTTPException(404, "Client not found")
+    if body.template_id:
+        tpl = await db.templates.find_one(scoped(db.templates, current_user, {"id": body.template_id}))
+        if not tpl:
+            raise HTTPException(404, "Checklist template not found")
     scan = {
         "id": new_id(),
+        "firm_id": current_user.firm_id,
         "client_id": client_id,
         "client_name": c["name"],
         "template_id": body.template_id,
@@ -384,26 +451,38 @@ async def start_scan(client_id: str, body: ScanBody):
         "started_at": now_iso(),
     }
     await db.scans.insert_one(dict(scan))
-    asyncio.create_task(_run_scan(scan["id"], client_id, body.template_id, body.expected_period))
+    asyncio.create_task(_run_scan(scan["id"], current_user.firm_id, client_id, body.template_id, body.expected_period))
     return clean(scan)
 
 
 @api_router.get("/clients/{client_id}/scans")
-async def list_scans(client_id: str):
-    return await db.scans.find({"client_id": client_id}, {"_id": 0}).sort("started_at", -1).to_list(1000)
+async def list_scans(client_id: str, current_user: AuthedUser = Depends(get_current_user)):
+    client = await db.clients.find_one(scoped(db.clients, current_user, {"id": client_id}))
+    if not client:
+        raise HTTPException(404, "Client not found")
+    filt = scoped(db.scans, current_user, {"client_id": client_id})
+    return await db.scans.find(filt, {"_id": 0}).sort("started_at", -1).to_list(1000)
 
 
 @api_router.get("/scans/{scan_id}")
-async def get_scan(scan_id: str):
-    doc = await db.scans.find_one({"id": scan_id}, {"_id": 0})
+async def get_scan(scan_id: str, current_user: AuthedUser = Depends(get_current_user)):
+    doc = await db.scans.find_one(scoped(db.scans, current_user, {"id": scan_id}), {"_id": 0})
     if not doc:
         raise HTTPException(404, "Scan not found")
     return doc
 
 
 @api_router.get("/scans/{scan_id}/findings")
-async def get_findings(scan_id: str, category: Optional[str] = None, status: Optional[str] = None):
-    q = {"scan_id": scan_id}
+async def get_findings(
+    scan_id: str,
+    category: Optional[str] = None,
+    status: Optional[str] = None,
+    current_user: AuthedUser = Depends(get_current_user),
+):
+    scan = await db.scans.find_one(scoped(db.scans, current_user, {"id": scan_id}))
+    if not scan:
+        raise HTTPException(404, "Scan not found")
+    q = scoped(db.findings, current_user, {"scan_id": scan_id})
     if category:
         q["category"] = category
     if status:
@@ -412,22 +491,33 @@ async def get_findings(scan_id: str, category: Optional[str] = None, status: Opt
 
 
 @api_router.patch("/findings/{finding_id}")
-async def update_finding(finding_id: str, body: FindingUpdate):
-    if not await db.findings.find_one({"id": finding_id}):
+async def update_finding(
+    finding_id: str,
+    body: FindingUpdate,
+    current_user: AuthedUser = Depends(get_current_user),
+):
+    filt = scoped(db.findings, current_user, {"id": finding_id})
+    if not await db.findings.find_one(filt):
         raise HTTPException(404, "Finding not found")
     update = {k: v for k, v in body.model_dump().items() if v is not None}
     update["updated_at"] = now_iso()
-    await db.findings.update_one({"id": finding_id}, {"$set": update})
-    return await db.findings.find_one({"id": finding_id}, {"_id": 0})
+    await db.findings.update_one(filt, {"$set": update})
+    return await db.findings.find_one(filt, {"_id": 0})
 
 
 # ----------------------------- reports -----------------------------
 @api_router.get("/scans/{scan_id}/report")
-async def export_report(scan_id: str, format: str = "csv"):
-    scan = await db.scans.find_one({"id": scan_id}, {"_id": 0})
+async def export_report(
+    scan_id: str,
+    format: str = "csv",
+    current_user: AuthedUser = Depends(get_current_user),
+):
+    scan = await db.scans.find_one(scoped(db.scans, current_user, {"id": scan_id}), {"_id": 0})
     if not scan:
         raise HTTPException(404, "Scan not found")
-    findings = await db.findings.find({"scan_id": scan_id}, {"_id": 0}).sort("category", 1).to_list(100000)
+    findings = await db.findings.find(
+        scoped(db.findings, current_user, {"scan_id": scan_id}), {"_id": 0}
+    ).sort("category", 1).to_list(100000)
 
     fmt = format.lower()
     if fmt == "csv":
@@ -456,31 +546,31 @@ async def export_report(scan_id: str, format: str = "csv"):
     )
 
 
+# Public Root Endpoint
 @app.get("/")
 async def app_root():
     return {"message": "LedgerLens Cloud Accounting AI API"}
 
 
-@api_router.get("/")
-async def root():
-    return {"message": "LedgerLens Cloud Accounting AI API"}
-
-
-
+# Mount auth routes (public /api/auth/*) and protected routes (/api/*)
+app.include_router(auth_router)
 app.include_router(api_router)
-app.add_middleware(
-    CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
+# Configure CORS with strict explicit origins
+if config_error_cors is None and "CORS_ALLOWED_ORIGINS" in locals():
+    app.add_middleware(
+        CORSMiddleware,
+        allow_credentials=True,
+        allow_origins=CORS_ALLOWED_ORIGINS,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 
 @app.on_event("startup")
 async def seed_defaults():
     if config_error:
-        raise RuntimeError(f"Database configuration error: {config_error}")
+        raise RuntimeError(f"Startup configuration error: {config_error}")
     if db is None:
         raise RuntimeError("Database instance is not initialized.")
     if hasattr(db, "init"):
@@ -490,11 +580,23 @@ async def seed_defaults():
         logger.info("Object storage initialized")
     except Exception as e:  # noqa: BLE001
         logger.warning(f"Storage init deferred/unavailable: {e}")
-    if await db.templates.count_documents({}) == 0:
-        for tpl in default_templates():
-            await db.templates.insert_one({"id": new_id(), "created_at": now_iso(), **tpl})
-        logger.info("Seeded default checklist templates")
 
+    # Backfill legacy ownerless records safely into designated default firm
+    default_firm_id = "firm"
+    if hasattr(db, "backfill_legacy_firm"):
+        await db.backfill_legacy_firm(default_firm_id)
+        logger.info(f"Backfilled any legacy ownerless records to firm '{default_firm_id}'")
+
+    # Ensure default checklist templates are seeded for default firm if none exist
+    if await db.templates.count_documents({"firm_id": default_firm_id}) == 0:
+        for tpl in default_templates():
+            await db.templates.insert_one({
+                "id": new_id(),
+                "firm_id": default_firm_id,
+                "created_at": now_iso(),
+                **tpl,
+            })
+        logger.info("Seeded default checklist templates for default firm")
 
 
 @app.on_event("shutdown")
@@ -503,7 +605,6 @@ async def shutdown_db_client():
         res = db.close()
         if asyncio.iscoroutine(res):
             await res
-
 
 
 if __name__ == "__main__":

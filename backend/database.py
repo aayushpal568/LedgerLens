@@ -16,7 +16,9 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 logger = logging.getLogger(__name__)
 
 # Standard collections / tables
-COLLECTIONS = ["firm", "clients", "files", "templates", "scans", "findings"]
+COLLECTIONS = ["firm", "clients", "files", "templates", "scans", "findings", "users"]
+
+IMMUTABLE_FIELDS = {"id", "firm_id", "created_at"}
 
 _IDENTIFIER_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
@@ -277,16 +279,24 @@ class PostgresCollection:
             val = await conn.fetchval(query, *params)
         return int(val or 0)
 
-    async def insert_one(self, doc: dict) -> _InsertResult:
+    async def insert_one(self, doc: dict, upsert: bool = True) -> _InsertResult:
         d = dict(doc)
         d.pop("_id", None)
+        if "id" not in d:
+            d["id"] = str(uuid.uuid4())
         doc_id = str(d["id"])
         doc_json = json.dumps(d)
-        query = f"""
-            INSERT INTO {self.name} (id, doc, created_at, updated_at)
-            VALUES ($1, $2::jsonb, NOW(), NOW())
-            ON CONFLICT (id) DO UPDATE SET doc = EXCLUDED.doc, updated_at = NOW()
-        """
+        if not upsert or self.name == "users":
+            query = f"""
+                INSERT INTO {self.name} (id, doc, created_at, updated_at)
+                VALUES ($1, $2::jsonb, NOW(), NOW())
+            """
+        else:
+            query = f"""
+                INSERT INTO {self.name} (id, doc, created_at, updated_at)
+                VALUES ($1, $2::jsonb, NOW(), NOW())
+                ON CONFLICT (id) DO UPDATE SET doc = EXCLUDED.doc, updated_at = NOW()
+            """
         async with self._db.pool.acquire() as conn:
             await conn.execute(query, doc_id, doc_json)
         return _InsertResult([doc_id])
@@ -315,11 +325,12 @@ class PostgresCollection:
 
     async def update_one(self, filt: dict, update: dict, upsert: bool = False) -> _UpdateResult:
         where_sql, params = _build_sql_where(filt)
+        # Strip immutable fields from $set to protect tenant/system integrity
+        set_fields = {k: v for k, v in update.get("$set", {}).items() if k not in IMMUTABLE_FIELDS}
         async with self._db.pool.acquire() as conn:
             async with conn.transaction():
                 query = f"SELECT id, doc FROM {self.name}{where_sql} LIMIT 1 FOR UPDATE"
                 record = await conn.fetchrow(query, *params)
-                set_fields = update.get("$set", {})
                 if record is not None:
                     doc_id = record["id"]
                     current_doc = json.loads(record["doc"]) if isinstance(record["doc"], str) else dict(record["doc"])
@@ -422,6 +433,18 @@ class PostgresDatabase:
                         );
                         CREATE INDEX IF NOT EXISTS idx_{col}_doc ON {col} USING GIN (doc);
                     """)
+                # Tenant isolation and unique email indexes
+                await conn.execute("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users ((lower(doc->>'email')));
+                    CREATE INDEX IF NOT EXISTS idx_clients_firm ON clients ((doc->>'firm_id'));
+                    CREATE INDEX IF NOT EXISTS idx_files_firm ON files ((doc->>'firm_id'));
+                    CREATE INDEX IF NOT EXISTS idx_templates_firm ON templates ((doc->>'firm_id'));
+                    CREATE INDEX IF NOT EXISTS idx_scans_firm ON scans ((doc->>'firm_id'));
+                    CREATE INDEX IF NOT EXISTS idx_findings_firm ON findings ((doc->>'firm_id'));
+                    CREATE INDEX IF NOT EXISTS idx_files_client ON files ((doc->>'client_id'));
+                    CREATE INDEX IF NOT EXISTS idx_scans_client ON scans ((doc->>'client_id'));
+                    CREATE INDEX IF NOT EXISTS idx_findings_scan ON findings ((doc->>'scan_id'));
+                """)
             logger.info(f"Connected to PostgreSQL database at {safe_url}")
         except Exception as e:
             logger.error(f"Failed to initialize PostgreSQL schema: {e}")
@@ -436,6 +459,58 @@ class PostgresDatabase:
         if self._pg_pool is not None:
             await self._pg_pool.close()
             self._pg_pool = None
+
+    async def create_firm_and_user_atomic(self, firm_doc: dict, user_doc: dict, template_docs: List[dict]):
+        """Atomically create firm, user, and initial templates. Rejects duplicate emails with ValueError."""
+        email_clean = str(user_doc.get("email", "")).strip().lower()
+        if not email_clean:
+            raise ValueError("Email cannot be empty")
+
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                existing = await conn.fetchval(
+                    "SELECT id FROM users WHERE lower(doc->>'email') = $1 LIMIT 1",
+                    email_clean
+                )
+                if existing:
+                    raise ValueError(f"A user with email '{email_clean}' already exists.")
+
+                # Insert firm
+                f = dict(firm_doc)
+                f.pop("_id", None)
+                await conn.execute(
+                    "INSERT INTO firm (id, doc, created_at, updated_at) VALUES ($1, $2::jsonb, NOW(), NOW())",
+                    str(f["id"]), json.dumps(f)
+                )
+
+                # Insert user (strict insert, NO on conflict update)
+                u = dict(user_doc)
+                u.pop("_id", None)
+                u["email"] = email_clean
+                await conn.execute(
+                    "INSERT INTO users (id, doc, created_at, updated_at) VALUES ($1, $2::jsonb, NOW(), NOW())",
+                    str(u["id"]), json.dumps(u)
+                )
+
+                # Insert firm's initial checklist templates
+                for tpl in template_docs:
+                    t = dict(tpl)
+                    t.pop("_id", None)
+                    await conn.execute(
+                        "INSERT INTO templates (id, doc, created_at, updated_at) VALUES ($1, $2::jsonb, NOW(), NOW())",
+                        str(t["id"]), json.dumps(t)
+                    )
+
+    async def backfill_legacy_firm(self, default_firm_id: str):
+        """Safely backfill any legacy ownerless records into default_firm_id."""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                for col in ["clients", "files", "templates", "scans", "findings"]:
+                    await conn.execute(f"""
+                        UPDATE {col}
+                        SET doc = jsonb_set(doc, '{{firm_id}}', to_jsonb($1::text), true)
+                        WHERE (doc->>'firm_id') IS NULL OR (doc->>'firm_id') = ''
+                    """, str(default_firm_id))
 
     async def finalize_scan_atomic(self, scan_id: str, scan_update: dict, finding_docs: List[dict]):
         """Persist findings and update scan status in a single atomic transaction."""
@@ -463,19 +538,50 @@ class PostgresDatabase:
                         json.dumps(current_doc), scan_id,
                     )
 
-    async def delete_client_cascade(self, client_id: str):
-        """Atomically delete client, files, scans, and findings in a single transaction."""
+    async def delete_client_cascade(self, client_id: str, firm_id: Optional[str] = None):
+        """Atomically delete client, files, scans, and findings, removing storage objects."""
+        import storage
         async with self.pool.acquire() as conn:
+            # Query file storage paths before deletion
+            if firm_id:
+                f_rows = await conn.fetch(
+                    "SELECT doc->>'storage_path' as sp FROM files WHERE (doc->>'client_id') = $1 AND (doc->>'firm_id') = $2",
+                    client_id, str(firm_id)
+                )
+            else:
+                f_rows = await conn.fetch(
+                    "SELECT doc->>'storage_path' as sp FROM files WHERE (doc->>'client_id') = $1",
+                    client_id
+                )
+            for r in f_rows:
+                sp = r["sp"]
+                if sp:
+                    try:
+                        storage.delete_object(sp)
+                    except Exception as e:
+                        logger.warning(f"Error removing object {sp} during cascade delete: {e}")
+
             async with conn.transaction():
-                await conn.execute("""
-                    DELETE FROM findings
-                    WHERE (doc->>'scan_id') IN (
-                        SELECT id FROM scans WHERE (doc->>'client_id') = $1
-                    )
-                """, client_id)
-                await conn.execute("DELETE FROM scans WHERE (doc->>'client_id') = $1", client_id)
-                await conn.execute("DELETE FROM files WHERE (doc->>'client_id') = $1", client_id)
-                await conn.execute("DELETE FROM clients WHERE id = $1", client_id)
+                if firm_id:
+                    await conn.execute("""
+                        DELETE FROM findings
+                        WHERE (doc->>'scan_id') IN (
+                            SELECT id FROM scans WHERE (doc->>'client_id') = $1 AND (doc->>'firm_id') = $2
+                        )
+                    """, client_id, str(firm_id))
+                    await conn.execute("DELETE FROM scans WHERE (doc->>'client_id') = $1 AND (doc->>'firm_id') = $2", client_id, str(firm_id))
+                    await conn.execute("DELETE FROM files WHERE (doc->>'client_id') = $1 AND (doc->>'firm_id') = $2", client_id, str(firm_id))
+                    await conn.execute("DELETE FROM clients WHERE id = $1 AND (doc->>'firm_id') = $2", client_id, str(firm_id))
+                else:
+                    await conn.execute("""
+                        DELETE FROM findings
+                        WHERE (doc->>'scan_id') IN (
+                            SELECT id FROM scans WHERE (doc->>'client_id') = $1
+                        )
+                    """, client_id)
+                    await conn.execute("DELETE FROM scans WHERE (doc->>'client_id') = $1", client_id)
+                    await conn.execute("DELETE FROM files WHERE (doc->>'client_id') = $1", client_id)
+                    await conn.execute("DELETE FROM clients WHERE id = $1", client_id)
 
     def __getattr__(self, name: str) -> PostgresCollection:
         if name.startswith("_"):
@@ -534,12 +640,22 @@ class MemoryCollection:
         with self._db._lock:
             return sum(1 for v in self._db._data.get(self.name, {}).values() if _match(v, filt or {}))
 
-    async def insert_one(self, doc: dict) -> _InsertResult:
+    async def insert_one(self, doc: dict, upsert: bool = True) -> _InsertResult:
         d = dict(doc)
         d.pop("_id", None)
+        if "id" not in d:
+            d["id"] = str(uuid.uuid4())
         doc_id = str(d["id"])
         with self._db._lock:
-            self._db._data.setdefault(self.name, {})[doc_id] = d
+            col = self._db._data.setdefault(self.name, {})
+            if self.name == "users":
+                email_clean = str(d.get("email", "")).strip().lower()
+                for existing in col.values():
+                    if str(existing.get("email", "")).strip().lower() == email_clean:
+                        raise ValueError(f"A user with email '{email_clean}' already exists.")
+            if not upsert and doc_id in col:
+                raise ValueError(f"Document with id '{doc_id}' already exists.")
+            col[doc_id] = d
         return _InsertResult([doc_id])
 
     async def insert_many(self, docs: List[dict]) -> _InsertResult:
@@ -565,7 +681,8 @@ class MemoryCollection:
         with self._db._lock:
             col = self._db._data.setdefault(self.name, {})
             target = next((v for v in col.values() if _match(v, filt)), None)
-            set_fields = update.get("$set", {})
+            # Strip immutable fields from $set
+            set_fields = {k: v for k, v in update.get("$set", {}).items() if k not in IMMUTABLE_FIELDS}
             if target is not None:
                 target.update(set_fields)
                 return _UpdateResult(1, 1)
@@ -619,6 +736,45 @@ class MemoryDatabase:
         with self._lock:
             self._data.clear()
 
+    async def create_firm_and_user_atomic(self, firm_doc: dict, user_doc: dict, template_docs: List[dict]):
+        """Atomically create firm, user, and seeded templates in memory."""
+        email_clean = str(user_doc.get("email", "")).strip().lower()
+        if not email_clean:
+            raise ValueError("Email cannot be empty")
+
+        with self._lock:
+            users_col = self._data.setdefault("users", {})
+            for existing_user in users_col.values():
+                if str(existing_user.get("email", "")).strip().lower() == email_clean:
+                    raise ValueError(f"A user with email '{email_clean}' already exists.")
+
+            # Create firm
+            f = dict(firm_doc)
+            f.pop("_id", None)
+            self._data.setdefault("firm", {})[str(f["id"])] = f
+
+            # Create user
+            u = dict(user_doc)
+            u.pop("_id", None)
+            u["email"] = email_clean
+            users_col[str(u["id"])] = u
+
+            # Create templates
+            tpl_col = self._data.setdefault("templates", {})
+            for tpl in template_docs:
+                t = dict(tpl)
+                t.pop("_id", None)
+                tpl_col[str(t["id"])] = t
+
+    async def backfill_legacy_firm(self, default_firm_id: str):
+        """Safely backfill any legacy ownerless records into default_firm_id."""
+        with self._lock:
+            for col_name in ["clients", "files", "templates", "scans", "findings"]:
+                col = self._data.setdefault(col_name, {})
+                for doc in col.values():
+                    if not doc.get("firm_id"):
+                        doc["firm_id"] = str(default_firm_id)
+
     async def finalize_scan_atomic(self, scan_id: str, scan_update: dict, finding_docs: List[dict]):
         """Atomically persist findings and update scan status."""
         with self._lock:
@@ -638,14 +794,26 @@ class MemoryDatabase:
                 self._data["scans"] = scans_backup
                 raise
 
-    async def delete_client_cascade(self, client_id: str):
-        """Atomically delete client, files, scans, and findings."""
+    async def delete_client_cascade(self, client_id: str, firm_id: Optional[str] = None):
+        """Atomically delete client, files, scans, and findings, removing storage objects."""
+        import storage
         with self._lock:
             backup = {col: dict(self._data.get(col, {})) for col in COLLECTIONS}
             try:
+                # Delete files from object storage
+                files_col = self._data.get("files", {})
+                for f in files_col.values():
+                    if f.get("client_id") == client_id and (not firm_id or f.get("firm_id") == str(firm_id)):
+                        sp = f.get("storage_path")
+                        if sp:
+                            try:
+                                storage.delete_object(sp)
+                            except Exception as e:
+                                logger.warning(f"Error removing object {sp} during cascade: {e}")
+
                 scan_ids = [
                     sid for sid, s in self._data.get("scans", {}).items()
-                    if s.get("client_id") == client_id
+                    if s.get("client_id") == client_id and (not firm_id or s.get("firm_id") == str(firm_id))
                 ]
                 self._data["findings"] = {
                     fid: f for fid, f in self._data.get("findings", {}).items()
@@ -653,13 +821,16 @@ class MemoryDatabase:
                 }
                 self._data["scans"] = {
                     sid: s for sid, s in self._data.get("scans", {}).items()
-                    if s.get("client_id") != client_id
+                    if not (s.get("client_id") == client_id and (not firm_id or s.get("firm_id") == str(firm_id)))
                 }
                 self._data["files"] = {
                     fid: f for fid, f in self._data.get("files", {}).items()
-                    if f.get("client_id") != client_id
+                    if not (f.get("client_id") == client_id and (not firm_id or f.get("firm_id") == str(firm_id)))
                 }
-                self._data.get("clients", {}).pop(client_id, None)
+                clients_col = self._data.get("clients", {})
+                if client_id in clients_col:
+                    if not firm_id or clients_col[client_id].get("firm_id") == str(firm_id):
+                        clients_col.pop(client_id, None)
             except Exception:
                 self._data.update(backup)
                 raise

@@ -37,8 +37,12 @@ export function AppProvider({ children }) {
           setFirm(f || null);
           setClients(Array.isArray(c) ? c : []);
           return;
-        } catch {
+        } catch (err) {
           if (!active) return;
+          // Crucial: 401 Unauthorized must NOT trigger the 30-attempt retry loop
+          if (err?.response?.status === 401) {
+            return;
+          }
           await new Promise((resolve) => setTimeout(resolve, 1000));
         }
       }

@@ -54,10 +54,20 @@ def test_reports_escape_markup_and_spreadsheet_formulas():
 @pytest.fixture
 def api_client(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_BACKEND", "memory")
+    monkeypatch.setenv("AUTH_SECRET_KEY", "test-secret-key-at-least-32-characters-long")
     sys.modules.pop("server", None)
     sys.modules.pop("database", None)
     server = importlib.import_module("server")
     with TestClient(server.app) as client:
+        # Signup to obtain auth token
+        res = client.post("/api/auth/signup", json={
+            "email": "qa@example.com",
+            "password": "Password123!",
+            "firm_name": "QA Firm",
+            "user_name": "QA User"
+        })
+        token = res.json()["access_token"]
+        client.headers["Authorization"] = f"Bearer {token}"
         yield client, server
 
 
@@ -69,8 +79,9 @@ def test_missing_finding_update_returns_404(api_client):
 
 def test_invalid_review_status_is_rejected(api_client):
     client, server = api_client
-    finding = {"id": "finding-1", "scan_id": "scan-1", "status": "unreviewed"}
     import asyncio
+    user = asyncio.run(server.db.users.find_one({"email": "qa@example.com"}))
+    finding = {"id": "finding-1", "scan_id": "scan-1", "firm_id": user["firm_id"], "status": "unreviewed"}
     asyncio.run(server.db.findings.insert_one(finding))
     response = client.patch("/api/findings/finding-1", json={"status": "delete_files"})
     assert response.status_code == 422

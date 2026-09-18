@@ -10,11 +10,45 @@ BASE = os.environ.get("REACT_APP_BACKEND_URL", "http://127.0.0.1:8001").rstrip("
 
 @pytest.fixture(scope="session")
 def s():
-    session = requests.Session()
-    token = os.environ.get("LEDGERLENS_BACKEND_TOKEN", "")
-    if token:
-        session.headers["x-ledgerlens-token"] = token
-    return session
+    is_live = False
+    try:
+        r = requests.get(BASE.rsplit("/api", 1)[0] + "/", timeout=0.5)
+        if r.status_code == 200:
+            is_live = True
+    except Exception:
+        is_live = False
+
+    if is_live:
+        session = requests.Session()
+        token = os.environ.get("LEDGERLENS_BACKEND_TOKEN", "")
+        if not token:
+            r = session.post(f"{BASE}/auth/signup", json={
+                "email": f"backend_test_{int(time.time())}@example.com",
+                "password": "Password123!",
+                "firm_name": "Regression Test Firm",
+                "user_name": "Regression User"
+            })
+            if r.status_code in (200, 201):
+                token = r.json()["access_token"]
+        if token:
+            session.headers["Authorization"] = f"Bearer {token}"
+        return session
+    else:
+        from fastapi.testclient import TestClient
+        import server
+        client = TestClient(server.app, base_url="http://127.0.0.1:8001")
+        client.__enter__()
+        r = client.post(f"{BASE}/auth/signup", json={
+            "email": f"backend_test_{int(time.time())}@example.com",
+            "password": "Password123!",
+            "firm_name": "Regression Test Firm",
+            "user_name": "Regression User"
+        })
+        if r.status_code in (200, 201):
+            token = r.json()["access_token"]
+            client.headers["Authorization"] = f"Bearer {token}"
+        yield client
+        client.__exit__(None, None, None)
 
 
 @pytest.fixture(scope="session")
@@ -166,9 +200,8 @@ def test_client_not_found(s):
 
 
 # ---------------- cancel scan endpoint (NEW) ----------------
-def test_cancel_scan_404():
-    s2 = requests.Session()
-    r = s2.post(f"{BASE}/scans/does-not-exist-xyz/cancel")
+def test_cancel_scan_404(s):
+    r = s.post(f"{BASE}/scans/does-not-exist-xyz/cancel")
     assert r.status_code == 404
 
 

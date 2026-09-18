@@ -59,6 +59,17 @@ def test_backend_api_and_database():
         assert res.status_code == 200, f"Root failed: {res.status_code}"
         print("  [PASS] Root endpoint /")
 
+        # Authenticate
+        signup_res = client.post("/api/auth/signup", json={
+            "email": "verify_all_api@example.com",
+            "password": "Password123!",
+            "firm_name": "Verify Firm",
+            "user_name": "Verify User"
+        })
+        assert signup_res.status_code in (200, 201), f"Signup failed: {signup_res.text}"
+        token = signup_res.json()["access_token"]
+        client.headers["Authorization"] = f"Bearer {token}"
+
         # Firm
         res = client.get("/api/firm")
         assert res.status_code == 200, f"GET /api/firm failed: {res.text}"
@@ -253,6 +264,17 @@ def test_core_engine_realistic_files():
 def test_end_to_end_integration():
     print("\n--- 3. Testing Full End-to-End Integration Workflow ---")
     with TestClient(server.app) as client:
+        # Authenticate
+        signup_res = client.post("/api/auth/signup", json={
+            "email": "verify_all_e2e@example.com",
+            "password": "Password123!",
+            "firm_name": "Apex Chartered Accountants",
+            "user_name": "Apex User"
+        })
+        assert signup_res.status_code in (200, 201), f"Signup failed: {signup_res.text}"
+        token = signup_res.json()["access_token"]
+        client.headers["Authorization"] = f"Bearer {token}"
+
         # Step 1: Create Client
         c_res = client.post("/api/clients", json={"name": "Apex Chartered Accountants Client", "client_type": "Small Business"})
         cid = c_res.json()["id"]
