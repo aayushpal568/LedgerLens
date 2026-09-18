@@ -661,6 +661,13 @@ async def post_agent_message(
     }
     await database.agent_runs.insert_one(run_doc)
 
+    # 5. Launch background agent loop execution
+    try:
+        from agent.loop import start_agent_run_background
+        start_agent_run_background(user, run_id, target_thread_id, db=database)
+    except Exception as e:
+        logger.warning(f"Could not immediately start background agent loop: {e}")
+
     return {
         "run_id": run_id,
         "thread_id": target_thread_id,
@@ -670,7 +677,7 @@ async def post_agent_message(
 
 
 async def get_agent_run(user: AuthedUser, run_id: str, db=None) -> dict:
-    """Retrieve run metadata strictly scoped to user's firm."""
+    """Retrieve run metadata strictly scoped to user's firm, hiding internal thoughts."""
     database = _get_db(db)
     clean_run_id = (run_id or "").strip()
     if not clean_run_id:
@@ -682,7 +689,33 @@ async def get_agent_run(user: AuthedUser, run_id: str, db=None) -> dict:
     )
     if not run:
         raise HTTPException(404, "Agent run not found")
-    return run
+    return {
+        "id": run["id"],
+        "firm_id": run["firm_id"],
+        "thread_id": run["thread_id"],
+        "status": run.get("status"),
+        "created_by": run.get("created_by"),
+        "created_at": run.get("created_at"),
+        "started_at": run.get("started_at"),
+        "completed_at": run.get("completed_at"),
+        "error": run.get("error"),
+    }
+
+
+async def cancel_agent_run(user: AuthedUser, run_id: str, db=None) -> dict:
+    """Cancel an active or queued agent run."""
+    database = _get_db(db)
+    clean_run_id = (run_id or "").strip()
+    await get_agent_run(user, clean_run_id, db=database)
+
+    from agent.loop import request_run_cancellation
+    request_run_cancellation(clean_run_id)
+
+    await database.agent_runs.update_one(
+        scoped(database.agent_runs, user, {"id": clean_run_id}),
+        {"$set": {"status": RUN_STATUS_CANCELLED, "completed_at": now_iso()}},
+    )
+    return {"ok": True, "status": RUN_STATUS_CANCELLED}
 
 
 async def update_agent_run(

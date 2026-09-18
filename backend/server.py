@@ -285,6 +285,14 @@ async def get_agent_run(
     return await services.get_agent_run(current_user, run_id, db=db)
 
 
+@api_router.post("/agent/runs/{run_id}/cancel")
+async def cancel_agent_run(
+    run_id: str,
+    current_user: AuthedUser = Depends(get_current_user),
+):
+    return await services.cancel_agent_run(current_user, run_id, db=db)
+
+
 # Public Root Endpoint
 @app.get("/")
 async def app_root():

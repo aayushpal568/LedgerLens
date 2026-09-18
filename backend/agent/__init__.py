@@ -14,6 +14,16 @@ from agent.tools import (
     register_read_only_tools,
 )
 
+from agent.loop import (
+    MAX_CLAUDE_TURNS,
+    MAX_TOOL_CALLS,
+    run_agent_loop,
+    start_agent_run_background,
+    set_global_llm_provider,
+    get_llm_provider,
+    request_run_cancellation,
+)
+
 __all__ = [
     "Tool",
     "ToolRegistry",
@@ -22,4 +32,11 @@ __all__ = [
     "validate_tool_arguments",
     "READ_ONLY_TOOLS",
     "register_read_only_tools",
+    "MAX_CLAUDE_TURNS",
+    "MAX_TOOL_CALLS",
+    "run_agent_loop",
+    "start_agent_run_background",
+    "set_global_llm_provider",
+    "get_llm_provider",
+    "request_run_cancellation",
 ]

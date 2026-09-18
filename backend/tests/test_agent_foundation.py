@@ -108,7 +108,7 @@ def test_authenticated_message_creates_thread_and_queued_run(client):
     assert run_data["id"] == run_id
     assert run_data["firm_id"] == firm_id
     assert run_data["thread_id"] == thread_id
-    assert run_data["status"] == "queued"
+    assert run_data["status"] in ("queued", "running")
     assert run_data["created_by"] == user_id
 
 
