@@ -321,7 +321,7 @@ EXPORT_REPORT_SCHEMA: Dict[str, Any] = {
         },
         "format": {
             "type": "string",
-            "enum": ["csv", "xlsx", "pdf"],
+            "enum": ["csv", "xlsx", "pdf", "CSV", "XLSX", "PDF"],
             "description": "Export format: 'csv', 'xlsx', or 'pdf'. Defaults to 'csv'.",
         },
     },

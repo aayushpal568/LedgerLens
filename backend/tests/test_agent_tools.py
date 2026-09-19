@@ -337,11 +337,35 @@ def test_read_only_tools_execution_and_sanitization():
         assert summary["important_findings"][0]["category"] == "exact_duplicate"
 
         # 7. Test get_agent_run_status
+        # 7. Test get_agent_run_status
         res_run = await execute_tool(user, "get_agent_run_status", {"run_id": run_id})
         assert res_run["success"] is True
         run_data = res_run["result"]
         assert run_data["id"] == run_id
         assert run_data["status"] == "queued"
+
+        # 8. Test export_report (csv, xlsx, pdf)
+        res_export_csv = await execute_tool(user, "export_report", {"scan_id": scan_id, "format": "csv"})
+        assert res_export_csv["success"] is True
+        csv_info = res_export_csv["result"]
+        assert csv_info["scan_id"] == scan_id
+        assert csv_info["format"] == "csv"
+        assert csv_info["media_type"] == "text/csv"
+        assert csv_info["download_url"] == f"/api/scans/{scan_id}/report?format=csv"
+        assert csv_info["status"] == "ready"
+        # CRITICAL SANITIZATION: Never leak raw data bytes, storage paths, or database internals
+        assert "data" not in csv_info
+        assert "storage_path" not in csv_info
+        assert "_id" not in csv_info
+
+        res_export_pdf = await execute_tool(user, "export_report", {"scan_id": scan_id, "format": "pdf"})
+        assert res_export_pdf["success"] is True
+        assert res_export_pdf["result"]["format"] == "pdf"
+        assert res_export_pdf["result"]["media_type"] == "application/pdf"
+
+        res_export_xlsx = await execute_tool(user, "export_report", {"scan_id": scan_id, "format": "xlsx"})
+        assert res_export_xlsx["success"] is True
+        assert res_export_xlsx["result"]["format"] == "xlsx"
 
     asyncio.run(_test())
 
@@ -401,9 +425,99 @@ def test_cross_tenant_isolation_in_tools():
         assert b_run["error_code"] == 404
         assert "Agent run not found" in b_run["error"]
 
+        # Firm B attempts to export Firm A's scan report
+        b_export = await execute_tool(user_b, "export_report", {"scan_id": scan_a_id, "format": "csv"})
+        assert b_export["success"] is False
+        assert b_export["error_code"] == 404
+        assert "Scan not found" in b_export["error"]
+
         # Firm B list_clients returns 0 Firm A clients
         b_clients = await execute_tool(user_b, "list_clients", {})
         assert b_clients["success"] is True
         assert all(c["id"] != client_a_id for c in b_clients["result"])
 
     asyncio.run(_test())
+
+
+# ===========================================================================
+# 6. Safe Export Behavior and Format Constraints
+# ===========================================================================
+def test_safe_export_report_behavior():
+    firm_id = f"firm_exp_{uuid.uuid4().hex[:6]}"
+    user = AuthedUser(user_id="u-exp", firm_id=firm_id, token_version=1)
+
+    async def _test():
+        # Setup: Client, Scan, and Finding
+        client_doc = await services.create_client(user, name="Export Test Corp", db=server.db)
+        scan_id = str(uuid.uuid4())
+        await server.db.scans.insert_one({
+            "id": scan_id,
+            "firm_id": firm_id,
+            "client_id": client_doc["id"],
+            "client_name": "Export Test Corp",
+            "status": "completed",
+            "expected_period": 2024,
+        })
+        await server.db.findings.insert_one({
+            "id": str(uuid.uuid4()),
+            "firm_id": firm_id,
+            "scan_id": scan_id,
+            "client_id": client_doc["id"],
+            "category": "wrong_period",
+            "severity": "medium",
+            "title": "Period Mismatch",
+            "filenames": ["tax_2023.pdf"],
+            "status": "unreviewed",
+        })
+
+        # 1. Omitting format defaults safely to "csv"
+        res_default = await execute_tool(user, "export_report", {"scan_id": scan_id})
+        assert res_default["success"] is True
+        assert res_default["result"]["format"] == "csv"
+        assert res_default["result"]["download_url"] == f"/api/scans/{scan_id}/report?format=csv"
+        assert "data" not in res_default["result"]
+
+        # 2. Invalid format option rejected by schema validator
+        res_invalid_fmt = await execute_tool(user, "export_report", {"scan_id": scan_id, "format": "malicious_exe"})
+        assert res_invalid_fmt["success"] is False
+        assert res_invalid_fmt["error_type"] == "InvalidArgument"
+        assert "not in allowed choices" in res_invalid_fmt["error"]
+
+        # 3. Unexpected argument rejected
+        res_extra_arg = await execute_tool(user, "export_report", {"scan_id": scan_id, "leak_data": True})
+        assert res_extra_arg["success"] is False
+        assert res_extra_arg["error_type"] == "InvalidArgument"
+        assert "Unexpected argument" in res_extra_arg["error"]
+
+        # 4. Nonexistent scan returns 404
+        res_missing = await execute_tool(user, "export_report", {"scan_id": str(uuid.uuid4())})
+        assert res_missing["success"] is False
+        assert res_missing["error_code"] == 404
+        assert "Scan not found" in res_missing["error"]
+
+    asyncio.run(_test())
+
+
+# ===========================================================================
+# 7. Every Read-Only Tool Schema and Security Contract
+# ===========================================================================
+def test_every_read_only_tool_contract():
+    firm_id = f"firm_contract_{uuid.uuid4().hex[:6]}"
+    user = AuthedUser(user_id="u-contract", firm_id=firm_id, token_version=1)
+
+    for tool_name in EXPECTED_READ_ONLY_TOOLS:
+        tool = default_registry.get(tool_name)
+        assert tool is not None, f"Tool '{tool_name}' must exist in registry"
+        assert tool.read_only is True, f"Tool '{tool_name}' must have read_only=True"
+        assert tool.approval_required is False, f"Tool '{tool_name}' must have approval_required=False"
+
+        # Must reject 'firm_id' parameter in tool arguments
+        res_firm_inject = asyncio.run(execute_tool(user, tool_name, {"firm_id": "other_firm"}))
+        assert res_firm_inject["success"] is False
+        assert res_firm_inject["error_type"] == "InvalidArgument"
+        assert "firm_id" in res_firm_inject["error"]
+
+        # Must reject non-dict argument payload
+        res_non_dict = asyncio.run(execute_tool(user, tool_name, ["invalid", "list"]))
+        assert res_non_dict["success"] is False
+        assert res_non_dict["error_type"] == "InvalidArgument"
