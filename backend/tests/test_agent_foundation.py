@@ -256,3 +256,257 @@ def test_agent_run_states_and_run_steps():
         assert "Invalid run status" in str(exc_info.value)
 
     asyncio.run(_test())
+
+
+# ===========================================================================
+# 7. Idempotency (Header and Body)
+# ===========================================================================
+def test_agent_idempotency_via_header_and_body(client):
+    data, headers = _signup(client, f"idempotent_{uuid.uuid4().hex[:6]}@testfirm.com", "Idempotent Firm")
+    user_id = data["user"]["id"]
+    firm_id = data["firm"]["id"]
+    user = AuthedUser(user_id=user_id, firm_id=firm_id, token_version=1)
+
+    import asyncio
+
+    # Test 1: Idempotency via Idempotency-Key header
+    idem_header = {"Idempotency-Key": f"header-idem-{uuid.uuid4().hex}"}
+    res1 = client.post(
+        "/api/agent/messages",
+        json={"text": "Idempotent query via header"},
+        headers={**headers, **idem_header},
+    )
+    assert res1.status_code == 202
+    body1 = res1.json()
+    run1_id = body1["run_id"]
+    thread1_id = body1["thread_id"]
+
+    # Immediate replay with same header
+    res2 = client.post(
+        "/api/agent/messages",
+        json={"text": "Idempotent query via header"},
+        headers={**headers, **idem_header},
+    )
+    assert res2.status_code == 202
+    body2 = res2.json()
+    assert body2["run_id"] == run1_id
+    assert body2["thread_id"] == thread1_id
+
+    # Verify only 1 run and 1 message created in DB
+    async def _verify_counts():
+        runs = await server.db.agent_runs.find(
+            scoped(server.db.agent_runs, user, {"idempotency_key": idem_header["Idempotency-Key"]})
+        ).to_list(10)
+        assert len(runs) == 1
+        messages = await server.db.agent_messages.find(
+            scoped(server.db.agent_messages, user, {"thread_id": thread1_id})
+        ).to_list(10)
+        assert len(messages) == 1
+
+    asyncio.run(_verify_counts())
+
+    # Test 2: Idempotency via JSON body idempotency_key
+    idem_body_key = f"body-idem-{uuid.uuid4().hex}"
+    res3 = client.post(
+        "/api/agent/messages",
+        json={"text": "Idempotent query via body", "idempotency_key": idem_body_key},
+        headers=headers,
+    )
+    assert res3.status_code == 202
+    body3 = res3.json()
+    run3_id = body3["run_id"]
+
+    # Replay with same body key
+    res4 = client.post(
+        "/api/agent/messages",
+        json={"text": "Idempotent query via body", "idempotency_key": idem_body_key},
+        headers=headers,
+    )
+    assert res4.status_code == 202
+    body4 = res4.json()
+    assert body4["run_id"] == run3_id
+
+
+# ===========================================================================
+# 8. Cross-Tenant Idempotency Isolation
+# ===========================================================================
+def test_cross_tenant_idempotency_isolation(client):
+    shared_idem_key = f"shared-idem-key-{uuid.uuid4().hex}"
+
+    # Firm A uses the key
+    data_a, headers_a = _signup(client, f"idem_a_{uuid.uuid4().hex[:6]}@firma.com", "Firm A")
+    res_a = client.post(
+        "/api/agent/messages",
+        json={"text": "Firm A query", "idempotency_key": shared_idem_key},
+        headers=headers_a,
+    )
+    assert res_a.status_code == 202
+    run_a_id = res_a.json()["run_id"]
+
+    # Firm B uses the exact same key
+    data_b, headers_b = _signup(client, f"idem_b_{uuid.uuid4().hex[:6]}@firmb.com", "Firm B")
+    res_b = client.post(
+        "/api/agent/messages",
+        json={"text": "Firm B query", "idempotency_key": shared_idem_key},
+        headers=headers_b,
+    )
+    assert res_b.status_code == 202
+    run_b_id = res_b.json()["run_id"]
+
+    # Strict isolation: Firm B gets its own run, NOT Firm A's run
+    assert run_a_id != run_b_id
+    assert res_a.json()["thread_id"] != res_b.json()["thread_id"]
+
+
+# ===========================================================================
+# 9. Invalid IDs Handling
+# ===========================================================================
+def test_invalid_ids_agent_routes(client):
+    _, headers = _signup(client, f"invalid_ids_{uuid.uuid4().hex[:6]}@testfirm.com", "Invalid IDs Firm")
+
+    # GET with whitespace run_id (%20%20)
+    res = client.get("/api/agent/runs/%20%20", headers=headers)
+    assert res.status_code == 400
+
+    # GET with oversized run_id (>256 chars)
+    oversized_id = "x" * 300
+    res = client.get(f"/api/agent/runs/{oversized_id}", headers=headers)
+    assert res.status_code == 400
+
+    # GET with nonexistent random ID
+    res = client.get(f"/api/agent/runs/nonexistent-run-{uuid.uuid4()}", headers=headers)
+    assert res.status_code == 404
+
+    # POST with nonexistent thread_id
+    res = client.post(
+        "/api/agent/messages",
+        json={"text": "Hello", "thread_id": f"nonexistent-thread-{uuid.uuid4()}"},
+        headers=headers,
+    )
+    assert res.status_code == 404
+
+    # POST with oversized thread_id (>256 chars)
+    res = client.post(
+        "/api/agent/messages",
+        json={"text": "Hello", "thread_id": "t" * 300},
+        headers=headers,
+    )
+    assert res.status_code == 400
+
+    # POST with oversized idempotency_key (>256 chars)
+    res = client.post(
+        "/api/agent/messages",
+        json={"text": "Hello", "idempotency_key": "k" * 300},
+        headers=headers,
+    )
+    assert res.status_code == 400
+
+    # POST with whitespace thread_id creates new thread cleanly
+    res = client.post(
+        "/api/agent/messages",
+        json={"text": "Whitespace thread id", "thread_id": "   "},
+        headers=headers,
+    )
+    assert res.status_code == 202
+    assert res.json()["thread_id"] is not None
+
+
+# ===========================================================================
+# 10. Safe Progress and Status Exposure (Never Leaks Internal Thoughts)
+# ===========================================================================
+def test_agent_run_safe_status_exposure(client):
+    import asyncio
+
+    data, headers = _signup(client, f"safe_status_{uuid.uuid4().hex[:6]}@testfirm.com", "Safe Status Firm")
+    user_id = data["user"]["id"]
+    firm_id = data["firm"]["id"]
+    user = AuthedUser(user_id=user_id, firm_id=firm_id, token_version=1)
+
+    async def _setup():
+        # Create a run directly in DB with sensitive thoughts & prompts in metadata
+        run_id = f"run-leak-test-{uuid.uuid4().hex}"
+        thread_id = f"thread-leak-test-{uuid.uuid4().hex}"
+        doc = {
+            "id": run_id,
+            "firm_id": firm_id,
+            "thread_id": thread_id,
+            "status": "running",
+            "created_by": user_id,
+            "created_at": "2026-09-19T10:00:00Z",
+            "started_at": "2026-09-19T10:00:01Z",
+            "completed_at": None,
+            "error": "Error: connection timeout to backend internal",
+            "metadata": {
+                "initial_message_id": "msg-001",
+                "thought": "INTERNAL PRIVATE REASONING: DO NOT SHOW USER",
+                "prompt": "SYSTEM PROMPT: You are LedgerLens AI",
+                "system_prompt": "SECRET SYSTEM PROMPT",
+                "token": "secret_internal_token_xyz",
+                "raw_response": "{'some': 'raw'}",
+                "internal": "debug_data",
+                "safe_step_count": 2,
+            },
+        }
+        await server.db.agent_runs.insert_one(doc)
+        return run_id
+
+    run_id = asyncio.run(_setup())
+
+    # Query GET /api/agent/runs/{run_id}
+    res = client.get(f"/api/agent/runs/{run_id}", headers=headers)
+    assert res.status_code == 200
+    run_body = res.json()
+
+    # Verify safe fields present
+    assert run_body["id"] == run_id
+    assert run_body["status"] == "running"
+    assert run_body["metadata"]["initial_message_id"] == "msg-001"
+    assert run_body["metadata"]["safe_step_count"] == 2
+
+    # Verify secrets and thoughts NEVER exposed
+    assert "thought" not in run_body["metadata"]
+    assert "prompt" not in run_body["metadata"]
+    assert "system_prompt" not in run_body["metadata"]
+    assert "token" not in run_body["metadata"]
+    assert "raw_response" not in run_body["metadata"]
+    assert "internal" not in run_body["metadata"]
+
+
+# ===========================================================================
+# 11. PostgreSQL Persistence Collections Verification
+# ===========================================================================
+def test_agent_collections_persistence_and_scoping():
+    import asyncio
+
+    user_a = AuthedUser(user_id="u-col-1", firm_id="firm-col-a", token_version=1)
+    user_b = AuthedUser(user_id="u-col-2", firm_id="firm-col-b", token_version=1)
+
+    async def _test():
+        # Verify COLLECTIONS registration
+        from database import COLLECTIONS
+        for col_name in ("agent_threads", "agent_messages", "agent_runs", "agent_run_steps"):
+            assert col_name in COLLECTIONS
+
+        # Insert documents for firm A
+        t_id = f"t-{uuid.uuid4().hex[:6]}"
+        m_id = f"m-{uuid.uuid4().hex[:6]}"
+        r_id = f"r-{uuid.uuid4().hex[:6]}"
+        s_id = f"s-{uuid.uuid4().hex[:6]}"
+
+        await server.db.agent_threads.insert_one({"id": t_id, "firm_id": user_a.firm_id, "title": "Test Thread"})
+        await server.db.agent_messages.insert_one({"id": m_id, "firm_id": user_a.firm_id, "thread_id": t_id, "text": "Msg"})
+        await server.db.agent_runs.insert_one({"id": r_id, "firm_id": user_a.firm_id, "thread_id": t_id, "status": "queued"})
+        await server.db.agent_run_steps.insert_one({"id": s_id, "firm_id": user_a.firm_id, "run_id": r_id, "step_type": "tool_call"})
+
+        # Scoped queries for user A find them
+        assert await server.db.agent_threads.find_one(scoped(server.db.agent_threads, user_a, {"id": t_id})) is not None
+        assert await server.db.agent_messages.find_one(scoped(server.db.agent_messages, user_a, {"id": m_id})) is not None
+        assert await server.db.agent_runs.find_one(scoped(server.db.agent_runs, user_a, {"id": r_id})) is not None
+        assert await server.db.agent_run_steps.find_one(scoped(server.db.agent_run_steps, user_a, {"id": s_id})) is not None
+
+        # Scoped queries for user B cannot find them
+        assert await server.db.agent_threads.find_one(scoped(server.db.agent_threads, user_b, {"id": t_id})) is None
+        assert await server.db.agent_messages.find_one(scoped(server.db.agent_messages, user_b, {"id": m_id})) is None
+        assert await server.db.agent_runs.find_one(scoped(server.db.agent_runs, user_b, {"id": r_id})) is None
+        assert await server.db.agent_run_steps.find_one(scoped(server.db.agent_run_steps, user_b, {"id": s_id})) is None
+    asyncio.run(_test())

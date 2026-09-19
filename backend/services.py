@@ -600,12 +600,14 @@ async def post_agent_message(
     user: AuthedUser,
     text: str,
     thread_id: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
     db=None,
 ) -> dict:
     """Validate, record user message, and enqueue an agent run strictly within user's firm.
 
     Returns HTTP 202 payload with run_id, thread_id, and status.
-    Does NOT invoke LLM loop or tools yet.
+    Supports idempotent submission via idempotency_key.
+    Does NOT invoke LLM loop or tools synchronously.
     """
     database = _get_db(db)
 
@@ -620,10 +622,43 @@ async def post_agent_message(
             f"Message text exceeds maximum allowed length of {MAX_AGENT_MESSAGE_LENGTH} characters."
         )
 
+    # 2. Idempotency validation and replay check
+    clean_idempotency_key: Optional[str] = None
+    if idempotency_key is not None:
+        if not isinstance(idempotency_key, str):
+            raise HTTPException(400, "idempotency_key must be a string")
+        s = idempotency_key.strip()
+        if s:
+            if len(s) > 256:
+                raise HTTPException(400, "idempotency_key exceeds maximum length of 256 characters")
+            clean_idempotency_key = s
+
+    if clean_idempotency_key:
+        existing_run = await database.agent_runs.find_one(
+            scoped(database.agent_runs, user, {"idempotency_key": clean_idempotency_key}),
+            {"_id": 0},
+        )
+        if existing_run:
+            return {
+                "run_id": existing_run["id"],
+                "thread_id": existing_run["thread_id"],
+                "status": existing_run.get("status", RUN_STATUS_QUEUED),
+                "created_at": existing_run.get("created_at"),
+            }
+
     t_now = now_iso()
 
-    # 2. Verify or create thread
-    target_thread_id = (thread_id or "").strip()
+    # 3. Verify or create thread
+    target_thread_id: Optional[str] = None
+    if thread_id is not None:
+        if not isinstance(thread_id, str):
+            raise HTTPException(400, "thread_id must be a string")
+        s_thread = thread_id.strip()
+        if s_thread:
+            if len(s_thread) > 256:
+                raise HTTPException(400, "thread_id exceeds maximum length of 256 characters")
+            target_thread_id = s_thread
+
     if target_thread_id:
         thread = await database.agent_threads.find_one(
             scoped(database.agent_threads, user, {"id": target_thread_id}),
@@ -649,7 +684,7 @@ async def post_agent_message(
         }
         await database.agent_threads.insert_one(thread)
 
-    # 3. Create user message record
+    # 4. Create user message record
     msg_id = new_id()
     msg_doc = {
         "id": msg_id,
@@ -663,7 +698,7 @@ async def post_agent_message(
     }
     await database.agent_messages.insert_one(msg_doc)
 
-    # 4. Create agent run record in queued state
+    # 5. Create agent run record in queued state
     run_id = new_id()
     run_doc = {
         "id": run_id,
@@ -676,11 +711,12 @@ async def post_agent_message(
         "started_at": None,
         "completed_at": None,
         "error": None,
+        "idempotency_key": clean_idempotency_key,
         "metadata": {"initial_message_id": msg_id},
     }
     await database.agent_runs.insert_one(run_doc)
 
-    # 5. Launch background agent loop execution
+    # 6. Launch background agent loop execution
     try:
         from agent.loop import start_agent_run_background
         start_agent_run_background(user, run_id, target_thread_id, db=database)
@@ -696,11 +732,15 @@ async def post_agent_message(
 
 
 async def get_agent_run(user: AuthedUser, run_id: str, db=None) -> dict:
-    """Retrieve run metadata strictly scoped to user's firm, hiding internal thoughts."""
+    """Retrieve run metadata strictly scoped to user's firm, exposing safe progress only."""
     database = _get_db(db)
-    clean_run_id = (run_id or "").strip()
+    if not isinstance(run_id, str):
+        raise HTTPException(400, "run_id must be a string")
+    clean_run_id = run_id.strip()
     if not clean_run_id:
         raise HTTPException(400, "run_id is required")
+    if len(clean_run_id) > 256:
+        raise HTTPException(400, "run_id exceeds maximum length of 256 characters")
 
     run = await database.agent_runs.find_one(
         scoped(database.agent_runs, user, {"id": clean_run_id}),
@@ -708,6 +748,17 @@ async def get_agent_run(user: AuthedUser, run_id: str, db=None) -> dict:
     )
     if not run:
         raise HTTPException(404, "Agent run not found")
+
+    # Expose only safe metadata; never leak internal thoughts, system prompts, or private tokens
+    safe_metadata = {}
+    for k, v in (run.get("metadata") or {}).items():
+        if k in ("thought", "prompt", "system_prompt", "token", "raw_response", "internal"):
+            continue
+        safe_metadata[k] = v
+
+    raw_error = run.get("error")
+    safe_error = str(raw_error)[:500] if raw_error else None
+
     return {
         "id": run["id"],
         "firm_id": run["firm_id"],
@@ -717,8 +768,8 @@ async def get_agent_run(user: AuthedUser, run_id: str, db=None) -> dict:
         "created_at": run.get("created_at"),
         "started_at": run.get("started_at"),
         "completed_at": run.get("completed_at"),
-        "error": run.get("error"),
-        "metadata": run.get("metadata", {}),
+        "error": safe_error,
+        "metadata": safe_metadata,
     }
 
 

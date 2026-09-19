@@ -471,6 +471,7 @@ class PostgresDatabase:
                         CREATE INDEX IF NOT EXISTS idx_agent_approvals_run ON agent_approvals ((doc->>'run_id'));
                         CREATE INDEX IF NOT EXISTS idx_agent_approvals_status ON agent_approvals ((doc->>'status'));
                         CREATE INDEX IF NOT EXISTS idx_agent_approvals_thread ON agent_approvals ((doc->>'thread_id'));
+                        CREATE INDEX IF NOT EXISTS idx_agent_runs_idempotency ON agent_runs ((doc->>'idempotency_key'));
                     """)
                 finally:
                     await conn.execute("SELECT pg_advisory_unlock(7483921);")

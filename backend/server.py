@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException, Request, Depends
+from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException, Request, Depends, Header
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, ConfigDict
 from starlette.middleware.cors import CORSMiddleware
@@ -178,6 +178,7 @@ class AgentMessageRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
     thread_id: Optional[str] = None
     text: str
+    idempotency_key: Optional[str] = None
 
 
 class ApprovalRejectRequest(BaseModel):
@@ -424,7 +425,24 @@ async def export_report(
 async def post_agent_message(
     body: AgentMessageRequest,
     current_user: AuthedUser = Depends(get_current_user),
+    idempotency_key_header: Optional[str] = Header(None, alias="Idempotency-Key"),
 ):
+    effective_idempotency_key = body.idempotency_key or idempotency_key_header
+    if effective_idempotency_key:
+        clean_key = str(effective_idempotency_key).strip()
+        if clean_key:
+            existing_run = await db.agent_runs.find_one(
+                scoped(db.agent_runs, current_user, {"idempotency_key": clean_key}),
+                {"_id": 0},
+            )
+            if existing_run:
+                return {
+                    "run_id": existing_run["id"],
+                    "thread_id": existing_run["thread_id"],
+                    "status": existing_run.get("status", services.RUN_STATUS_QUEUED),
+                    "created_at": existing_run.get("created_at"),
+                }
+
     if not agent_msg_limiter.check_and_record(current_user.firm_id):
         raise HTTPException(429, "Agent message rate limit exceeded. Please wait a moment.")
 
@@ -442,6 +460,7 @@ async def post_agent_message(
         current_user,
         text=body.text,
         thread_id=body.thread_id,
+        idempotency_key=effective_idempotency_key,
         db=db,
     )
 
@@ -451,7 +470,10 @@ async def get_agent_run(
     run_id: str,
     current_user: AuthedUser = Depends(get_current_user),
 ):
-    return await services.get_agent_run(current_user, run_id, db=db)
+    clean_id = (run_id or "").strip()
+    if not clean_id:
+        raise HTTPException(400, "run_id is required")
+    return await services.get_agent_run(current_user, clean_id, db=db)
 
 
 @api_router.get("/agent/runs/{run_id}/steps")
