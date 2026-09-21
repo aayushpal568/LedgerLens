@@ -1,0 +1,33 @@
+# Docker build-context exclusions (deployment config only — no app logic).
+# IMPORTANT: this one .dockerignore feeds BOTH builds (backend root Dockerfile AND
+# deploy/Dockerfile.frontend), so it must NOT exclude frontend/build or deploy/.
+# It removes only: real secrets, and backend dev artifacts that must never be baked.
+
+# Secrets / local env (any file ending in .env is kept out of the build context;
+# the committed *.example templates are re-included by the negations below)
+**/.env
+**/.env.*
+**/*.env
+!**/.env.example
+!**/*.env.example
+
+# Backend dev/build artifacts that must not ship in the image
+backend/.venv/
+backend/venv/
+backend/uploads/
+backend/build/
+backend/dist/
+backend/.pytest_cache/
+backend/**/__pycache__/
+**/__pycache__/
+**/*.pyc
+
+# Repo/VCS + heavy or irrelevant trees (frontend BUILD OUTPUT is intentionally NOT excluded)
+.git/
+.github/
+**/node_modules/
+tests/
+dummy_accounting_test/
+test_reports/
+*.log
+memory/

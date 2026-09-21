@@ -1,0 +1,16 @@
+# Frontend static image for LedgerLens staging.
+# Build context = repo root (so it can read frontend/build and deploy/nginx.staging.conf).
+# IMPORTANT: run `npm run build` with REACT_APP_BACKEND_URL set BEFORE building this image.
+FROM nginx:1.27-alpine
+
+# SPA + same-origin /api + /healthz reverse proxy to the backend service.
+COPY deploy/nginx.staging.conf /etc/nginx/conf.d/default.conf
+
+# Prebuilt React bundle (CRA/craco output). Build it first:
+#   cd frontend && CI=false REACT_APP_BACKEND_URL=https://<staging-host> npx craco build
+COPY frontend/build/ /usr/share/nginx/html/
+
+EXPOSE 80
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD wget -qO- http://127.0.0.1/ >/dev/null 2>&1 || exit 1

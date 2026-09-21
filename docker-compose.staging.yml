@@ -1,0 +1,60 @@
+# LedgerLens V1 — STAGING (PRIMARY: managed PostgreSQL + Cloudflare R2)
+#
+# Primary topology (exactly the target architecture):
+#   - backend  : ONE container, uvicorn single worker, durable agent worker in-process.
+#   - frontend : nginx serves the built SPA and reverse-proxies /api + /healthz -> backend (same origin).
+#   - PostgreSQL : MANAGED, external — reached only via DATABASE_URL (no db service here).
+#   - Object storage : Cloudflare R2 (S3-compatible), external — via STORAGE_BACKEND/S3_* env.
+#   - TLS/HTTPS + public hostname : the deployment platform's edge (fronts `frontend:80`).
+#
+# Secrets are NEVER in this file. They live in ./deploy/staging.env (gitignored; copy from
+# deploy/staging.env.example). This file holds only placeholders + ${VAR} indirection.
+# A self-hosted-Postgres variant is documented in deploy/README.staging.md (appendix).
+
+name: ledgerlens-staging
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile          # repo-root backend image (COPY backend /app)
+    image: ledgerlens-v1-staging:latest
+    restart: unless-stopped
+    init: true                        # proper PID-1 signal handling / reaping
+    env_file:
+      - ./deploy/staging.env          # managed PG DSN + R2 creds + AUTH_SECRET_KEY + feature keys
+    environment:
+      # Safe, non-secret defaults; deploy/staging.env may override.
+      HOST: 0.0.0.0
+      PORT: "8001"
+      DATA_BACKEND: postgres          # authoritative = your managed PostgreSQL (DATABASE_URL)
+      TRUST_PROXY: "true"             # behind the platform LB (nginx sets X-Forwarded-For)
+      AGENT_WORKER_ENABLED: "true"    # durable worker drains agent_runs in this process
+    expose:
+      - "8001"                        # internal only — NOT published to the host
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,os,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('PORT','8001')+'/healthz',timeout=3).status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  frontend:
+    build:
+      context: .                      # repo root: needs frontend/build AND deploy/nginx.staging.conf
+      dockerfile: deploy/Dockerfile.frontend
+    image: ledgerlens-v1-staging-frontend:latest
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"                     # ONLY public entry; platform TLS edge forwards to this
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+
+# Managed PostgreSQL + R2 are external -> no compose volumes/services for them.
+# (Self-hosted-DB variant adds a `postgres:` service + pgdata volume; see README appendix.)
