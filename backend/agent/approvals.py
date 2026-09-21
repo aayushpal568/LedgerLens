@@ -5,7 +5,9 @@ Guarantees:
 - 10-minute TTL expiry enforced strictly.
 - SHA-256 canonical hashing of proposed arguments guarantees anti-tampering.
 - Multi-tenancy: approvals are strictly scoped to the authenticated user's firm.
-- One-time execution: approved actions cannot be executed multiple times.
+- One-time execution enforced SERVER-SIDE via an atomic status compare-and-swap
+  (approved -> executing -> executed/failed), so a double approval, a concurrent resume,
+  or a recovered/stale worker can never execute the same consequential action twice.
 """
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -25,14 +27,18 @@ logger = logging.getLogger(__name__)
 APPROVAL_STATUS_PENDING = "pending"
 APPROVAL_STATUS_APPROVED = "approved"
 APPROVAL_STATUS_REJECTED = "rejected"
+APPROVAL_STATUS_EXECUTING = "executing"  # internal: an executor holds the atomic claim
 APPROVAL_STATUS_EXECUTED = "executed"
+APPROVAL_STATUS_FAILED = "failed"
 APPROVAL_STATUS_EXPIRED = "expired"
 
 VALID_APPROVAL_STATUSES = {
     APPROVAL_STATUS_PENDING,
     APPROVAL_STATUS_APPROVED,
     APPROVAL_STATUS_REJECTED,
+    APPROVAL_STATUS_EXECUTING,
     APPROVAL_STATUS_EXECUTED,
+    APPROVAL_STATUS_FAILED,
     APPROVAL_STATUS_EXPIRED,
 }
 
@@ -164,11 +170,21 @@ async def approve_approval(user: AuthedUser, approval_id: str, db=None) -> dict:
 
     t_now = services.now_iso()
     database = services._get_db(db)
-    filt = scoped(database.agent_approvals, user, {"id": approval_id})
-    await database.agent_approvals.update_one(
-        filt,
-        {"$set": {"status": APPROVAL_STATUS_APPROVED, "approved_at": t_now, "approved_by": user.user_id}},
+    # Atomic pending -> approved so two concurrent approvals cannot both take effect.
+    ok = await database.cas_agent_approval(
+        approval_id,
+        str(user.firm_id),
+        [APPROVAL_STATUS_PENDING],
+        APPROVAL_STATUS_APPROVED,
+        {"approved_at": t_now, "approved_by": user.user_id},
     )
+    if not ok:
+        fresh = await get_approval(user, approval_id, db=db)
+        if fresh.get("status") == APPROVAL_STATUS_APPROVED:
+            return fresh  # idempotent: already approved by a racing request
+        raise HTTPException(
+            400, f"Cannot approve action with status '{fresh.get('status')}'. Must be 'pending'."
+        )
     return await get_approval(user, approval_id, db=db)
 
 
@@ -184,28 +200,63 @@ async def reject_approval(user: AuthedUser, approval_id: str, reason: Optional[s
 
     t_now = services.now_iso()
     database = services._get_db(db)
-    filt = scoped(database.agent_approvals, user, {"id": approval_id})
-    await database.agent_approvals.update_one(
-        filt,
-        {
-            "$set": {
-                "status": APPROVAL_STATUS_REJECTED,
-                "rejected_at": t_now,
-                "rejected_by": user.user_id,
-                "rejection_reason": reason or "Rejected by user",
-            }
-        },
+    ok = await database.cas_agent_approval(
+        approval_id,
+        str(user.firm_id),
+        [APPROVAL_STATUS_PENDING],
+        APPROVAL_STATUS_REJECTED,
+        {"rejected_at": t_now, "rejected_by": user.user_id, "rejection_reason": reason or "Rejected by user"},
+    )
+    if not ok:
+        fresh = await get_approval(user, approval_id, db=db)
+        if fresh.get("status") == APPROVAL_STATUS_REJECTED:
+            return fresh  # idempotent: already rejected by a racing request
+        raise HTTPException(
+            400, f"Cannot reject action with status '{fresh.get('status')}'. Must be 'pending'."
+        )
+    return await get_approval(user, approval_id, db=db)
+
+
+async def claim_for_execution(user: AuthedUser, approval_id: str, db=None) -> bool:
+    """Atomically claim an APPROVED approval for single execution.
+
+    Returns True ONLY for the caller that wins the approved -> executing transition. Any
+    concurrent/duplicate/stale attempt sees a non-approved status and returns False, so the
+    consequential tool is executed at most once.
+    """
+    database = services._get_db(db)
+    return await database.cas_agent_approval(
+        approval_id,
+        str(user.firm_id),
+        [APPROVAL_STATUS_APPROVED],
+        APPROVAL_STATUS_EXECUTING,
+        {"execution_claimed_at": services.now_iso()},
+    )
+
+
+async def mark_approval_executed(user: AuthedUser, approval_id: str, db=None) -> dict:
+    """Finalize a claimed approval as executed (atomic executing/approved -> executed)."""
+    database = services._get_db(db)
+    t_now = services.now_iso()
+    await database.cas_agent_approval(
+        approval_id,
+        str(user.firm_id),
+        [APPROVAL_STATUS_EXECUTING, APPROVAL_STATUS_APPROVED],
+        APPROVAL_STATUS_EXECUTED,
+        {"executed_at": t_now},
     )
     return await get_approval(user, approval_id, db=db)
 
 
-async def mark_approval_executed(user: AuthedUser, approval_id: str, db=None) -> dict:
-    """Mark an approved action as executed."""
+async def mark_approval_failed(user: AuthedUser, approval_id: str, error: Optional[str] = None, db=None) -> dict:
+    """Mark a claimed approval as failed (atomic executing -> failed) with a safe message."""
     database = services._get_db(db)
     t_now = services.now_iso()
-    filt = scoped(database.agent_approvals, user, {"id": approval_id})
-    await database.agent_approvals.update_one(
-        filt,
-        {"$set": {"status": APPROVAL_STATUS_EXECUTED, "executed_at": t_now}},
+    await database.cas_agent_approval(
+        approval_id,
+        str(user.firm_id),
+        [APPROVAL_STATUS_EXECUTING],
+        APPROVAL_STATUS_FAILED,
+        {"failed_at": t_now, "execution_error": (str(error)[:500] if error else "Execution failed")},
     )
     return await get_approval(user, approval_id, db=db)

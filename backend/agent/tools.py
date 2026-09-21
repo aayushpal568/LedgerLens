@@ -380,6 +380,26 @@ async def handle_run_scan(user: AuthedUser, args: Dict[str, Any], db=None) -> Di
     template_id = str(args["template_id"]).strip()
     raw_period = args.get("expected_period")
     period_arg = int(raw_period) if (raw_period and str(raw_period).isdigit()) else raw_period
+
+    # Duplicate-execution guard: reuse an identical scan for this client that is still active.
+    try:
+        existing_scans = await services.list_scans(user, client_id, db=db)
+    except Exception:  # noqa: BLE001
+        existing_scans = []
+    for s in existing_scans:
+        same_template = (s.get("template_id") or None) == (template_id or None)
+        same_period = str(s.get("expected_period") or "") == str(raw_period or "")
+        if same_template and same_period and s.get("status") in ("queued", "scanning", "cancelling"):
+            return {
+                "scan_id": s["id"],
+                "client_id": client_id,
+                "client_name": s.get("client_name"),
+                "template_id": template_id,
+                "status": s.get("status"),
+                "reused_active": True,
+                "message": "An identical audit scan is already in progress; reused its reference.",
+            }
+
     scan = await services.start_scan(user, client_id, template_id=template_id, expected_period=period_arg, db=db)
     return {
         "scan_id": scan["id"],
@@ -387,6 +407,7 @@ async def handle_run_scan(user: AuthedUser, args: Dict[str, Any], db=None) -> Di
         "client_name": scan.get("client_name"),
         "template_id": template_id,
         "status": scan.get("status", "queued"),
+        "reused_active": False,
         "message": "Audit scan initiated successfully.",
     }
 
@@ -434,6 +455,10 @@ async def handle_create_client(user: AuthedUser, args: Dict[str, Any], db=None) 
 # ---------------------------------------------------------------------------
 # 10. set_finding_review (Action Tool - requires approval)
 # ---------------------------------------------------------------------------
+# Review states MUST use the application's existing valid finding statuses
+# (see server.FindingUpdate / services.update_finding): do NOT invent a parallel system.
+VALID_REVIEW_STATUSES = ["keep", "keep_both", "ignore", "review_later", "unreviewed"]
+
 SET_FINDING_REVIEW_SCHEMA: Dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -443,8 +468,12 @@ SET_FINDING_REVIEW_SCHEMA: Dict[str, Any] = {
         },
         "review_status": {
             "type": "string",
-            "enum": ["needs_review", "accepted", "ignored"],
-            "description": "Review status disposition: 'needs_review', 'accepted', or 'ignored'.",
+            "enum": VALID_REVIEW_STATUSES,
+            "description": (
+                "Review disposition using LedgerLens' existing finding statuses: "
+                "'keep' (valid exception), 'keep_both' (keep both duplicates), "
+                "'ignore' (false positive), 'review_later', or 'unreviewed'."
+            ),
         },
         "review_notes": {
             "type": "string",
@@ -457,24 +486,26 @@ SET_FINDING_REVIEW_SCHEMA: Dict[str, Any] = {
 
 
 async def handle_set_finding_review(user: AuthedUser, args: Dict[str, Any], db=None) -> Dict[str, Any]:
-    """Update the review status disposition and audit notes for a finding."""
+    """Update the review status/note for a finding using the existing finding service.
+
+    Existence + firm ownership are enforced by the tenant-scoped services.update_finding
+    (raises 404 when the finding is missing or belongs to another firm).
+    """
     finding_id = str(args["finding_id"]).strip()
     review_status = str(args["review_status"]).strip()
+    if review_status not in VALID_REVIEW_STATUSES:
+        raise ValueError(
+            f"Invalid review_status '{review_status}'. Allowed: {VALID_REVIEW_STATUSES}."
+        )
     review_notes = str(args.get("review_notes") or "").strip()
-    status_map = {
-        "needs_review": "review_later",
-        "accepted": "keep",
-        "ignored": "ignore",
-    }
-    target_status = status_map.get(review_status, review_status)
     updated = await services.update_finding(
         user,
         finding_id,
         {
-            "status": target_status,
+            "status": review_status,
             "review_status": review_status,
             "note": review_notes,
-            "review_notes": review_notes,
+            "review_note": review_notes,
         },
         db=db,
     )
@@ -483,7 +514,7 @@ async def handle_set_finding_review(user: AuthedUser, args: Dict[str, Any], db=N
         "review_status": review_status,
         "status": updated.get("status"),
         "review_notes": review_notes,
-        "message": f"Finding review disposition set to '{review_status}'.",
+        "message": f"Finding review status set to '{review_status}'.",
     }
 
 

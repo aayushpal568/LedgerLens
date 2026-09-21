@@ -52,6 +52,7 @@ export default function AgentChat({ initialThreadId = null, initialMessages = []
   const [approvalActionStatus, setApprovalActionStatus] = useState(null);
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState(null);
+  const [lastSentText, setLastSentText] = useState(null);
   const [savedThreads, setSavedThreads] = useState(() => {
     try {
       const raw = localStorage.getItem("ledgerlens_recent_threads");
@@ -173,6 +174,7 @@ export default function AgentChat({ initialThreadId = null, initialMessages = []
           setActiveRunId(null);
           setStatusMessage(null);
           setPendingApproval(null);
+          setLastSentText(null);
 
           // Fetch final conversation message stream
           const currentThreadId = run.thread_id || threadId;
@@ -203,8 +205,26 @@ export default function AgentChat({ initialThreadId = null, initialMessages = []
           setPendingApproval(null);
         }
       } catch (err) {
-        if (err?.response?.status === 401) {
+        const httpStatus = err?.response?.status;
+        if (httpStatus === 401) {
           // Handled by global auth interceptor
+          return;
+        }
+        if (httpStatus === 403 || httpStatus === 404) {
+          // Authorization / existence problem: stop polling, never retry, show safe message.
+          if (pollingRef.current) {
+            clearInterval(pollingRef.current);
+            pollingRef.current = null;
+          }
+          setActiveRunId(null);
+          setStatusMessage(null);
+          setPendingApproval(null);
+          setError(
+            httpStatus === 403
+              ? "You no longer have access to this agent run."
+              : "This agent run is no longer available."
+          );
+          isPollingRef.current = false;
           return;
         }
         consecutiveErrorsRef.current += 1;
@@ -236,20 +256,20 @@ export default function AgentChat({ initialThreadId = null, initialMessages = []
     };
   }, [activeRunId, threadId]);
 
-  // Send a user message
-  const handleSendMessage = async (e) => {
-    if (e) e.preventDefault();
-    const text = inputText.trim();
-    if (!text || isSending || activeRunId) return;
+  // Core send used by both the composer and the safe "Retry" action.
+  const sendUserText = async (text) => {
+    const clean = (text || "").trim();
+    if (!clean || isSending || activeRunId) return;
 
     setIsSending(true);
     setError(null);
+    setLastSentText(clean);
 
     // Optimistic UI message
     const tempUserMsg = {
       id: `temp-${Date.now()}`,
       role: "user",
-      text,
+      text: clean,
       created_at: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, tempUserMsg]);
@@ -257,7 +277,7 @@ export default function AgentChat({ initialThreadId = null, initialMessages = []
 
     try {
       const payload = {
-        text,
+        text: clean,
         thread_id: threadId || undefined,
       };
       const res = await api.postAgentMessage(payload);
@@ -267,7 +287,7 @@ export default function AgentChat({ initialThreadId = null, initialMessages = []
       try {
         const raw = localStorage.getItem("ledgerlens_recent_threads");
         const list = raw ? JSON.parse(raw) : [];
-        const titleSnippet = text.length > 35 ? `${text.slice(0, 35)}...` : text;
+        const titleSnippet = clean.length > 35 ? `${clean.slice(0, 35)}...` : clean;
         const entry = { id: res.thread_id, title: titleSnippet, updatedAt: new Date().toISOString() };
         const updated = [entry, ...list.filter((t) => t.id !== res.thread_id)].slice(0, 20);
         localStorage.setItem("ledgerlens_recent_threads", JSON.stringify(updated));
@@ -284,9 +304,22 @@ export default function AgentChat({ initialThreadId = null, initialMessages = []
         err?.response?.data?.message ||
         "Failed to send message. Please try again.";
       setError(typeof msg === "string" ? msg : JSON.stringify(msg));
+      // lastSentText is retained so the composer's Retry can safely re-send.
     } finally {
       setIsSending(false);
     }
+  };
+
+  // Send a user message
+  const handleSendMessage = (e) => {
+    if (e) e.preventDefault();
+    return sendUserText(inputText);
+  };
+
+  // Safe retry: only offered when no run is in flight and we have a prior message.
+  const handleRetry = () => {
+    if (activeRunId || isSending || !lastSentText) return;
+    return sendUserText(lastSentText);
   };
 
   // Keyboard navigation for sending: Enter sends, Shift+Enter newlines
@@ -305,7 +338,15 @@ export default function AgentChat({ initialThreadId = null, initialMessages = []
       setStatusMessage("Approved. Executing action...");
       await api.approveAgentApproval(pendingApproval.id);
     } catch (err) {
-      if (err?.response?.status === 401) return;
+      const s = err?.response?.status;
+      if (s === 401) return;
+      if (s === 403 || s === 404) {
+        // Already actioned or lost access: trust the server, clear the card, keep polling.
+        setPendingApproval(null);
+        setApprovalActionStatus(null);
+        setStatusMessage("This action was already handled. Updating...");
+        return;
+      }
       const msg = err?.response?.data?.detail || "Could not approve action.";
       setError(typeof msg === "string" ? msg : "Approval error occurred.");
       setApprovalActionStatus(null);
@@ -322,7 +363,14 @@ export default function AgentChat({ initialThreadId = null, initialMessages = []
         reason: "Rejected by user in chat interface",
       });
     } catch (err) {
-      if (err?.response?.status === 401) return;
+      const s = err?.response?.status;
+      if (s === 401) return;
+      if (s === 403 || s === 404) {
+        setPendingApproval(null);
+        setApprovalActionStatus(null);
+        setStatusMessage("This action was already handled. Updating...");
+        return;
+      }
       const msg = err?.response?.data?.detail || "Could not reject action.";
       setError(typeof msg === "string" ? msg : "Rejection error occurred.");
       setApprovalActionStatus(null);
@@ -724,6 +772,21 @@ export default function AgentChat({ initialThreadId = null, initialMessages = []
 
       {/* Input Area */}
       <footer className="p-4 border-t border-border bg-card/40 shrink-0">
+        {!activeRunId && !isSending && lastSentText && (
+          <div className="max-w-3xl mx-auto mb-2 flex justify-end">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleRetry}
+              data-testid="retry-send-btn"
+              className="text-xs h-7 gap-1.5"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              Try again
+            </Button>
+          </div>
+        )}
         <form onSubmit={handleSendMessage} className="max-w-3xl mx-auto flex gap-2">
           <textarea
             value={inputText}

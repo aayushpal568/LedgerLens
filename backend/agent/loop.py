@@ -40,6 +40,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from typing import Any, Dict, List, Optional, Set
 
 from auth_dep import AuthedUser
@@ -87,6 +88,54 @@ def request_run_cancellation(run_id: str) -> None:
 def is_run_cancelled(run_id: str) -> bool:
     """Check if cancellation has been requested for run_id."""
     return run_id in _CANCELLED_RUNS
+
+
+def _evidence_citations(turn_steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Derive safe evidence references from executed tool results (no raw payloads/secrets)."""
+    citations: List[Dict[str, Any]] = []
+    for s in turn_steps:
+        if s.get("type") != "tool_result":
+            continue
+        tool_name = s.get("tool")
+        result = s.get("result") or {}
+        payload = result.get("result") if isinstance(result, dict) and "result" in result else result
+        ids: List[str] = []
+        if isinstance(payload, list):
+            for item in payload:
+                if isinstance(item, dict):
+                    for key in ("id", "scan_id", "client_id"):
+                        if item.get(key):
+                            ids.append(str(item[key]))
+        elif isinstance(payload, dict):
+            for key in ("id", "scan_id", "client_id"):
+                if payload.get(key):
+                    ids.append(str(payload[key]))
+        citations.append(
+            {
+                "tool": tool_name,
+                "success": bool(result.get("success", True)) if isinstance(result, dict) else True,
+                "count": len(payload) if isinstance(payload, list) else None,
+                "entity_ids": sorted(set(ids))[:50],
+            }
+        )
+    return citations
+
+
+def _cap_tool_result(result: Any, max_chars: int) -> Any:
+    """Bound the size of a tool result before persisting / feeding to Claude."""
+    try:
+        serialized = json.dumps(result, ensure_ascii=False, default=str)
+    except Exception:
+        serialized = str(result)
+    if len(serialized) <= max_chars:
+        return result
+    return {
+        "success": (result.get("success") if isinstance(result, dict) else True),
+        "tool": (result.get("tool") if isinstance(result, dict) else None),
+        "truncated": True,
+        "note": f"Tool result exceeded {max_chars} characters and was truncated for safety.",
+        "excerpt": serialized[:max_chars],
+    }
 
 
 def extract_json(text: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -220,41 +269,23 @@ async def run_agent_loop(
 
     Idempotent: Executes at most once per active run.
     """
-    # 1. Idempotency and run state check
+    # 1. In-process fast-path guard (same worker must never run the same id twice)
     async with _RUN_LOCK:
         if run_id in _ACTIVE_RUNS:
-            logger.warning(f"Agent run '{run_id}' is already active. Ignoring duplicate invocation.")
+            logger.warning(f"Agent run '{run_id}' is already active in this process. Ignoring duplicate.")
             return {"status": "already_active", "run_id": run_id}
-
-        # Check existing DB run status
-        try:
-            current_run = await services.get_agent_run(user, run_id, db=db)
-        except Exception as e:
-            logger.error(f"Cannot load agent run '{run_id}': {e}")
-            return {"status": "error", "error": str(e)}
-
-        allowed_statuses = (
-            {services.RUN_STATUS_QUEUED}
-            if not is_resume
-            else {
-                services.RUN_STATUS_QUEUED,
-                services.RUN_STATUS_RUNNING,
-                services.RUN_STATUS_WAITING_FOR_APPROVAL,
-            }
-        )
-        if current_run.get("status") not in allowed_statuses:
-            logger.warning(
-                f"Agent run '{run_id}' status is '{current_run.get('status')}', expected one of {allowed_statuses}. Skipping."
-            )
-            return {"status": current_run.get("status"), "run_id": run_id}
-
         _ACTIVE_RUNS.add(run_id)
 
     tool_registry = registry or default_registry
     provider = llm_provider or get_llm_provider()
 
+    # Durable server-side execution limits
+    run_deadline = time.monotonic() + max(1, services.agent_run_timeout_seconds())
+    max_output_tokens = services.agent_max_total_output_tokens()
+    output_tokens_used = 0
+
     try:
-        # Check initial cancellation
+        # 1b. Early in-process cancellation short-circuit (pre-dispatch)
         if is_run_cancelled(run_id):
             await services.update_agent_run(
                 user,
@@ -264,13 +295,35 @@ async def run_agent_loop(
             )
             return {"status": services.RUN_STATUS_CANCELLED}
 
-        # Mark run running
-        await services.update_agent_run(
-            user,
-            run_id,
-            {"status": services.RUN_STATUS_RUNNING, "started_at": services.now_iso()},
-            db=db,
-        )
+        # 2. DURABLE ATOMIC CLAIM — authoritative cross-worker mutual exclusion.
+        # Two workers can never both obtain a live lease on the same run. A cancelled or
+        # terminal run is never claimable, so retries cannot resurrect a cancelled run.
+        if is_resume:
+            try:
+                current_run = await services.get_agent_run(user, run_id, db=db)
+            except Exception as e:
+                logger.error(f"Cannot load agent run '{run_id}': {e}")
+                return {"status": "error", "error": str(e)}
+            allowed_resume = {
+                services.RUN_STATUS_QUEUED,
+                services.RUN_STATUS_RUNNING,
+                services.RUN_STATUS_WAITING_FOR_APPROVAL,
+            }
+            if current_run.get("status") not in allowed_resume:
+                return {"status": current_run.get("status"), "run_id": run_id}
+        else:
+            claimed = await services.claim_agent_run(user, run_id, db=db)
+            if claimed is None:
+                cur_status = "not_found"
+                try:
+                    cur = await services.get_agent_run(user, run_id, db=db)
+                    cur_status = cur.get("status")
+                except Exception:
+                    pass
+                logger.info(
+                    f"Agent run '{run_id}' not claimed (held by another worker or terminal: {cur_status})."
+                )
+                return {"status": cur_status, "run_id": run_id, "claimed": False}
 
         # 2. Load conversation messages (tenant-scoped, bounded)
         raw_messages = await services.list_agent_messages(user, thread_id, db=db)
@@ -303,17 +356,20 @@ async def run_agent_loop(
         while turn_count < MAX_CLAUDE_TURNS:
             turn_count += 1
 
-            # Check cancellation before calling Claude (checks both in-memory set and DB)
-            cancelled = is_run_cancelled(run_id)
-            if not cancelled and db is not None:
-                try:
-                    db_run = await services.get_agent_run(user, run_id, db=db)
-                    if db_run.get("status") == services.RUN_STATUS_CANCELLED:
-                        cancelled = True
-                except Exception:
-                    pass
+            # --- Server-side guard before EVERY LLM/tool execution ---
+            # (1) Wall-clock timeout
+            if time.monotonic() > run_deadline:
+                err_msg = f"Agent run exceeded maximum execution time of {services.agent_run_timeout_seconds()}s."
+                await services.update_agent_run(
+                    user,
+                    run_id,
+                    {"status": services.RUN_STATUS_FAILED, "error": err_msg, "completed_at": services.now_iso()},
+                    db=db,
+                )
+                return {"status": services.RUN_STATUS_FAILED, "error": err_msg}
 
-            if cancelled:
+            # (2) Cancellation (in-process fast flag AND persisted DB status — cross-process safe)
+            if await services.run_is_cancelled(run_id, user=user, db=db):
                 await services.update_agent_run(
                     user,
                     run_id,
@@ -322,12 +378,26 @@ async def run_agent_loop(
                 )
                 return {"status": services.RUN_STATUS_CANCELLED}
 
+            # (3) Heartbeat: extend this worker's lease so a live run is never reclaimed
+            try:
+                await services.renew_agent_run_lease(user, run_id, db=db)
+            except Exception:
+                pass
+
             user_prompt = format_turn_prompt(bounded_messages, turn_steps)
 
             last_invocation_error = None
 
             async def _invoke_claude(prompt_text: str, token_budget: int) -> Optional[str]:
-                nonlocal last_invocation_error
+                nonlocal last_invocation_error, output_tokens_used
+                # Cumulative output-token budget (server-side protection)
+                if output_tokens_used + token_budget > max_output_tokens:
+                    last_invocation_error = (
+                        f"Agent exceeded maximum total output-token budget of {max_output_tokens} tokens."
+                    )
+                    logger.warning(f"Run '{run_id}' hit output-token budget: {last_invocation_error}")
+                    return None
+                output_tokens_used += token_budget
                 try:
                     if asyncio.iscoroutinefunction(getattr(provider, "generate", None)):
                         return await provider.generate(
@@ -354,20 +424,25 @@ async def run_agent_loop(
 
             if not raw_response:
                 if last_invocation_error:
-                    err_msg = f"Claude provider execution failed: {last_invocation_error}"
+                    detail_err = f"Claude provider execution failed: {last_invocation_error}"
+                    safe_err = "The AI provider failed to produce a response. Please try again shortly."
                 else:
-                    err_msg = "Claude provider returned an empty response or is unavailable."
+                    detail_err = "The AI provider returned an empty or unavailable response."
+                    safe_err = "The AI provider returned an empty response."
+                logger.error(f"Agent provider failure in run '{run_id}': {detail_err}")
                 await services.update_agent_run(
                     user,
                     run_id,
                     {
                         "status": services.RUN_STATUS_FAILED,
-                        "error": err_msg,
+                        "error": safe_err,
                         "completed_at": services.now_iso(),
+                        "lease_expires_at": None,
+                        "worker_id": None,
                     },
                     db=db,
                 )
-                return {"status": services.RUN_STATUS_FAILED, "error": err_msg}
+                return {"status": services.RUN_STATUS_FAILED, "error": detail_err}
 
             # 4. Parse and validate JSON protocol with exactly one retry on malformed/ambiguous response
             parsed = extract_json(raw_response)
@@ -466,32 +541,65 @@ async def run_agent_loop(
                 grounding_res = verify_grounding(final_text, turn_steps)
                 final_text = grounding_res.safe_text
 
-                # Store visible assistant message (NEVER expose thought in message text)
-                msg_id = services.new_id()
-                t_now = services.now_iso()
-                msg_doc = {
-                    "id": msg_id,
-                    "firm_id": user.firm_id,
-                    "thread_id": thread_id,
-                    "sender_id": "assistant",
-                    "role": "assistant",
-                    "text": final_text,
-                    "created_at": t_now,
-                    "metadata": {
-                        "run_id": run_id,
-                        "thought": thought if thought else None,
-                        "is_grounded": grounding_res.is_grounded,
+                # Persist an evidence reference step (final answer traceable to real tool results only)
+                await services.create_agent_run_step(
+                    user,
+                    run_id=run_id,
+                    thread_id=thread_id,
+                    step_type="evidence",
+                    input_data={"run_id": run_id},
+                    output_data={
+                        "grounded": grounding_res.is_grounded,
                         "violations": grounding_res.violations,
+                        "citations": getattr(grounding_res, "citations", None) or _evidence_citations(turn_steps),
+                        "tool_result_count": len([s for s in turn_steps if s.get("type") == "tool_result"]),
                     },
-                }
-                active_db = services._get_db(db)
-                await active_db.agent_messages.insert_one(msg_doc)
+                    status="completed",
+                    db=db,
+                )
 
-                # Mark run completed
+                # Idempotent assistant message: never duplicate on a durable re-execution.
+                active_db = services._get_db(db)
+                t_now = services.now_iso()
+                assistant_msgs = await active_db.agent_messages.find(
+                    {"firm_id": user.firm_id, "thread_id": thread_id, "role": "assistant"},
+                    {"_id": 0},
+                ).to_list(10000)
+                existing_msg = next(
+                    (m for m in assistant_msgs if (m.get("metadata") or {}).get("run_id") == run_id),
+                    None,
+                )
+                if existing_msg:
+                    msg_id = existing_msg["id"]
+                else:
+                    msg_id = services.new_id()
+                    msg_doc = {
+                        "id": msg_id,
+                        "firm_id": user.firm_id,
+                        "thread_id": thread_id,
+                        "sender_id": "assistant",
+                        "role": "assistant",
+                        "text": final_text,
+                        "created_at": t_now,
+                        "metadata": {
+                            "run_id": run_id,
+                            "thought": thought if thought else None,
+                            "is_grounded": grounding_res.is_grounded,
+                            "violations": grounding_res.violations,
+                        },
+                    }
+                    await active_db.agent_messages.insert_one(msg_doc)
+
+                # Mark run completed and release the lease (terminal state is never re-claimed).
                 await services.update_agent_run(
                     user,
                     run_id,
-                    {"status": services.RUN_STATUS_COMPLETED, "completed_at": t_now},
+                    {
+                        "status": services.RUN_STATUS_COMPLETED,
+                        "completed_at": t_now,
+                        "lease_expires_at": None,
+                        "worker_id": None,
+                    },
                     db=db,
                 )
                 return {"status": services.RUN_STATUS_COMPLETED, "message_id": msg_id}
@@ -562,8 +670,18 @@ async def run_agent_loop(
                 )
                 return {"status": services.RUN_STATUS_FAILED, "error": err_msg}
 
-            # Check cancellation before tool execution
-            if is_run_cancelled(run_id):
+            # Check timeout & cancellation (in-process + persisted DB status) before tool execution
+            if time.monotonic() > run_deadline:
+                err_msg = f"Agent run exceeded maximum execution time of {services.agent_run_timeout_seconds()}s."
+                await services.update_agent_run(
+                    user,
+                    run_id,
+                    {"status": services.RUN_STATUS_FAILED, "error": err_msg, "completed_at": services.now_iso()},
+                    db=db,
+                )
+                return {"status": services.RUN_STATUS_FAILED, "error": err_msg}
+
+            if await services.run_is_cancelled(run_id, user=user, db=db):
                 await services.update_agent_run(
                     user,
                     run_id,
@@ -627,6 +745,9 @@ async def run_agent_loop(
             tool_call_count += 1
             if tool_name == "run_scan":
                 run_scan_count += 1
+
+            # Enforce maximum tool-result size (persisted + fed back to Claude)
+            tool_result = _cap_tool_result(tool_result, services.agent_max_tool_result_chars())
 
             # Record tool result step
             await services.create_agent_run_step(
@@ -715,8 +836,13 @@ async def resume_agent_run(
     registry: Optional[Any] = None,
     db=None,
 ) -> Dict[str, Any]:
-    """Resume a paused agent run after approval or rejection."""
-    approval = await approvals.get_approval(user, approval_id, db=db)
+    """Resume a paused agent run after approval or rejection.
+
+    SERVER-SIDE enforcement: the persisted approval status and run status are revalidated
+    here — never trusting the `is_approved` flag alone — and execution is guarded by an
+    atomic approved->executing claim so a consequential action runs exactly once.
+    """
+    approval = await approvals.get_approval(user, approval_id, db=db)  # 404 if not this firm
     run_id = approval["run_id"]
     thread_id = approval["thread_id"]
     tool_name = approval["tool_name"]
@@ -724,28 +850,71 @@ async def resume_agent_run(
 
     tool_registry = registry or default_registry
 
+    # Revalidate authorization at execution time: the run must belong to this tenant and
+    # must not be a cancelled/failed terminal run (those may never execute a pending action).
+    run_state = await services.get_agent_run(user, run_id, db=db)  # 404 if not this firm
+    if run_state.get("status") in (services.RUN_STATUS_CANCELLED, services.RUN_STATUS_FAILED):
+        return {"status": run_state.get("status"), "run_id": run_id, "reason": "run_not_resumable"}
+
+    continue_loop = True
+
     if is_approved:
-        # Execute tool with exact proposed arguments and approved flag
-        tool_result = await execute_tool(
-            user,
-            tool_name,
-            proposed_args,
-            registry=tool_registry,
-            db=db,
-            is_approved=True,
-        )
-        await approvals.mark_approval_executed(user, approval_id, db=db)
-        await services.create_agent_run_step(
-            user,
-            run_id=run_id,
-            thread_id=thread_id,
-            step_type="tool_result",
-            input_data={"tool": tool_name, "approval_id": approval_id},
-            output_data=tool_result,
-            status="completed" if tool_result.get("success") else "failed",
-            error=tool_result.get("error"),
-            db=db,
-        )
+        if approval.get("status") == approvals.APPROVAL_STATUS_EXECUTED:
+            # Idempotent: a previously executed approval is never run again.
+            continue_loop = True
+        else:
+            won_claim = await services.claim_agent_approval_for_execution(user, approval_id, db=db)
+            if not won_claim:
+                # Not APPROVED (pending/expired/rejected) or another executor already holds
+                # the claim. Do NOT execute; keep the run paused for the authoritative result.
+                logger.info(
+                    f"Approval '{approval_id}' not executed on resume (status={approval.get('status')}): "
+                    "server-side authorization/exactly-once guard."
+                )
+                return {
+                    "status": run_state.get("status") or services.RUN_STATUS_WAITING_FOR_APPROVAL,
+                    "run_id": run_id,
+                    "approval_id": approval_id,
+                    "reason": "approval_not_executable",
+                }
+            # We hold the exclusive claim — execute the consequential tool with the exact
+            # validated arguments stored at proposal time.
+            try:
+                tool_result = await execute_tool(
+                    user,
+                    tool_name,
+                    proposed_args,
+                    registry=tool_registry,
+                    db=db,
+                    is_approved=True,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(f"Consequential tool '{tool_name}' failed on resume: {exc}")
+                tool_result = {
+                    "success": False,
+                    "tool": tool_name,
+                    "error": "Action execution failed.",
+                    "error_type": "ExecutionError",
+                }
+            if tool_result.get("success"):
+                await approvals.mark_approval_executed(user, approval_id, db=db)
+                step_status = "completed"
+            else:
+                await services.mark_agent_approval_failed(
+                    user, approval_id, error=tool_result.get("error"), db=db
+                )
+                step_status = "failed"
+            await services.create_agent_run_step(
+                user,
+                run_id=run_id,
+                thread_id=thread_id,
+                step_type="tool_result",
+                input_data={"tool": tool_name, "approval_id": approval_id},
+                output_data=tool_result,
+                status=step_status,
+                error=tool_result.get("error"),
+                db=db,
+            )
     else:
         rejection_result = {
             "success": False,
@@ -766,7 +935,10 @@ async def resume_agent_run(
             db=db,
         )
 
-    # Set run status back to running
+    if not continue_loop:
+        return {"status": services.RUN_STATUS_WAITING_FOR_APPROVAL, "run_id": run_id, "approval_id": approval_id}
+
+    # Set run status back to running (re-entrant lease for the resuming worker)
     await services.update_agent_run(
         user,
         run_id,

@@ -163,12 +163,14 @@ def test_action_tools_require_approval(test_setup):
         review_res = await execute_tool(
             user_a,
             "set_finding_review",
-            {"finding_id": finding_id, "review_status": "accepted", "review_notes": "Verified against ledger"},
+            {"finding_id": finding_id, "review_status": "keep", "review_notes": "Verified against ledger"},
             db=db,
             is_approved=True,
         )
         assert review_res["success"] is True
-        assert review_res["result"]["review_status"] == "accepted"
+        assert review_res["result"]["review_status"] == "keep"
+        updated_finding = await db.findings.find_one({"id": finding_id, "firm_id": user_a.firm_id}, {"_id": 0})
+        assert updated_finding["status"] == "keep"
 
     asyncio.run(_test())
 

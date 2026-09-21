@@ -11,9 +11,32 @@ import os
 import re
 import threading
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 logger = logging.getLogger(__name__)
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _parse_iso(value: Any) -> Optional[datetime]:
+    """Parse an ISO-8601 timestamp string into an aware datetime, or None."""
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return None
+
+
+# Default lease/recovery tuning for durable agent runs (overridable via env at service layer).
+DEFAULT_AGENT_LEASE_SECONDS = 120
+DEFAULT_AGENT_MAX_ATTEMPTS = 3
 
 # Standard collections / tables
 COLLECTIONS = [
@@ -472,6 +495,16 @@ class PostgresDatabase:
                         CREATE INDEX IF NOT EXISTS idx_agent_approvals_status ON agent_approvals ((doc->>'status'));
                         CREATE INDEX IF NOT EXISTS idx_agent_approvals_thread ON agent_approvals ((doc->>'thread_id'));
                         CREATE INDEX IF NOT EXISTS idx_agent_runs_idempotency ON agent_runs ((doc->>'idempotency_key'));
+                        -- Agent-critical hot-path indexes (durable worker queue drain + recovery + approval lookup).
+                        CREATE INDEX IF NOT EXISTS idx_agent_runs_queued
+                            ON agent_runs (((doc->>'created_at')))
+                            WHERE (doc->>'status') = 'queued';
+                        CREATE INDEX IF NOT EXISTS idx_agent_runs_running_lease
+                            ON agent_runs (((doc->>'lease_expires_at')))
+                            WHERE (doc->>'status') = 'running';
+                        CREATE INDEX IF NOT EXISTS idx_agent_approvals_pending_run
+                            ON agent_approvals ((doc->>'run_id'))
+                            WHERE (doc->>'status') = 'pending';
                     """)
                 finally:
                     await conn.execute("SELECT pg_advisory_unlock(7483921);")
@@ -612,6 +645,218 @@ class PostgresDatabase:
                     await conn.execute("DELETE FROM scans WHERE (doc->>'client_id') = $1", client_id)
                     await conn.execute("DELETE FROM files WHERE (doc->>'client_id') = $1", client_id)
                     await conn.execute("DELETE FROM clients WHERE id = $1", client_id)
+
+    @staticmethod
+    def _doc_from_row(row) -> dict:
+        return json.loads(row["doc"]) if isinstance(row["doc"], str) else dict(row["doc"])
+
+    async def claim_agent_run(
+        self,
+        run_id: str,
+        worker_id: str,
+        firm_id: str,
+        lease_seconds: int = DEFAULT_AGENT_LEASE_SECONDS,
+    ) -> Optional[dict]:
+        """Atomically transition a run to 'running' (compare-and-swap on status/lease).
+
+        A run is claimable only if it is 'queued', or 'running' with an EXPIRED lease
+        (dead worker). Enforces firm_id at the SQL layer. Returns the claimed doc or
+        None if another worker already holds a live lease or the run is terminal.
+        """
+        now = _utcnow()
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    "SELECT id, doc FROM agent_runs "
+                    "WHERE id = $1 AND (doc->>'firm_id') = $2 FOR UPDATE",
+                    str(run_id), str(firm_id),
+                )
+                if row is None:
+                    return None
+                doc = self._doc_from_row(row)
+                status = doc.get("status")
+                lease = _parse_iso(doc.get("lease_expires_at"))
+                owned_by_us = (
+                    status == "running"
+                    and str(doc.get("worker_id")) == str(worker_id)
+                    and lease is not None and lease > now
+                )
+                first_claim = status == "queued"
+                reclaim_dead = status == "running" and (lease is None or lease <= now) and not owned_by_us
+                if not (first_claim or reclaim_dead or owned_by_us):
+                    return None
+                if not owned_by_us:
+                    doc["attempt"] = int(doc.get("attempt", 0) or 0) + 1
+                doc["status"] = "running"
+                doc["worker_id"] = str(worker_id)
+                doc["started_at"] = doc.get("started_at") or now.isoformat()
+                doc["heartbeat_at"] = now.isoformat()
+                doc["lease_expires_at"] = (now + timedelta(seconds=lease_seconds)).isoformat()
+                doc["updated_at"] = now.isoformat()
+                await conn.execute(
+                    "UPDATE agent_runs SET doc = $1::jsonb, updated_at = NOW() WHERE id = $2",
+                    json.dumps(doc), str(run_id),
+                )
+                doc.pop("_id", None)
+                return doc
+
+    async def claim_next_queued_agent_run(
+        self,
+        worker_id: str,
+        firm_id: Optional[str] = None,
+        lease_seconds: int = DEFAULT_AGENT_LEASE_SECONDS,
+    ) -> Optional[dict]:
+        """Atomically pop and claim the oldest queued run (FIFO) using SKIP LOCKED.
+
+        Returns the claimed run doc, or None if the queue is empty. SKIP LOCKED ensures
+        concurrent workers never select/claim the same queued row.
+        """
+        now = _utcnow()
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                if firm_id is not None:
+                    row = await conn.fetchrow(
+                        "SELECT id, doc FROM agent_runs "
+                        "WHERE (doc->>'status') = 'queued' AND (doc->>'firm_id') = $1 "
+                        "ORDER BY created_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED",
+                        str(firm_id),
+                    )
+                else:
+                    row = await conn.fetchrow(
+                        "SELECT id, doc FROM agent_runs "
+                        "WHERE (doc->>'status') = 'queued' "
+                        "ORDER BY created_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
+                    )
+                if row is None:
+                    return None
+                # Row is already locked FOR UPDATE by this transaction; claim inline so
+                # there is no second nested acquire (which would self-deadlock the pool).
+                doc = self._doc_from_row(row)
+                doc["status"] = "running"
+                doc["worker_id"] = str(worker_id)
+                doc["started_at"] = doc.get("started_at") or now.isoformat()
+                doc["heartbeat_at"] = now.isoformat()
+                doc["lease_expires_at"] = (now + timedelta(seconds=lease_seconds)).isoformat()
+                doc["attempt"] = int(doc.get("attempt", 0) or 0) + 1
+                doc["updated_at"] = now.isoformat()
+                await conn.execute(
+                    "UPDATE agent_runs SET doc = $1::jsonb, updated_at = NOW() WHERE id = $2",
+                    json.dumps(doc), str(row["id"]),
+                )
+                doc.pop("_id", None)
+                return doc
+
+    async def renew_agent_run_lease(
+        self,
+        run_id: str,
+        worker_id: str,
+        firm_id: str,
+        lease_seconds: int = DEFAULT_AGENT_LEASE_SECONDS,
+    ) -> bool:
+        """Extend the lease for a run held by worker_id. Returns False if not the holder."""
+        now = _utcnow()
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    "SELECT id, doc FROM agent_runs "
+                    "WHERE id = $1 AND (doc->>'firm_id') = $2 FOR UPDATE",
+                    str(run_id), str(firm_id),
+                )
+                if row is None:
+                    return False
+                doc = self._doc_from_row(row)
+                if doc.get("status") != "running" or str(doc.get("worker_id")) != str(worker_id):
+                    return False
+                doc["heartbeat_at"] = now.isoformat()
+                doc["lease_expires_at"] = (now + timedelta(seconds=lease_seconds)).isoformat()
+                doc["updated_at"] = now.isoformat()
+                await conn.execute(
+                    "UPDATE agent_runs SET doc = $1::jsonb, updated_at = NOW() WHERE id = $2",
+                    json.dumps(doc), str(run_id),
+                )
+                return True
+
+    async def recover_stale_agent_runs(
+        self,
+        max_attempts: int = DEFAULT_AGENT_MAX_ATTEMPTS,
+    ) -> dict:
+        """Requeue runs whose lease expired (dead worker) or fail them if attempts exhausted.
+
+        Returns {'requeued': n, 'failed': m}. This is the restart-recovery primitive: a
+        freshly started worker calls it to pick up runs orphaned by a prior crash/restart.
+        """
+        now = _utcnow()
+        requeued = 0
+        failed = 0
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                rows = await conn.fetch(
+                    "SELECT id, doc FROM agent_runs "
+                    "WHERE (doc->>'status') = 'running' "
+                    "FOR UPDATE SKIP LOCKED"
+                )
+                for row in rows:
+                    doc = self._doc_from_row(row)
+                    lease = _parse_iso(doc.get("lease_expires_at"))
+                    if lease is not None and lease > now:
+                        continue  # live lease — another worker owns it
+                    attempt = int(doc.get("attempt", 0) or 0)
+                    if attempt >= max_attempts:
+                        doc["status"] = "failed"
+                        doc["error"] = "Execution interrupted after maximum recovery attempts."
+                        doc["completed_at"] = now.isoformat()
+                        doc["lease_expires_at"] = None
+                        doc["worker_id"] = None
+                        failed += 1
+                    else:
+                        doc["status"] = "queued"
+                        doc["worker_id"] = None
+                        doc["lease_expires_at"] = None
+                        doc["heartbeat_at"] = None
+                        requeued += 1
+                    doc["updated_at"] = now.isoformat()
+                    await conn.execute(
+                        "UPDATE agent_runs SET doc = $1::jsonb, updated_at = NOW() WHERE id = $2",
+                        json.dumps(doc), str(row["id"]),
+                    )
+        return {"requeued": requeued, "failed": failed}
+
+    async def cas_agent_approval(
+        self,
+        approval_id: str,
+        firm_id: str,
+        expect_statuses: List[str],
+        to_status: str,
+        set_fields: Optional[dict] = None,
+    ) -> bool:
+        """Atomic compare-and-swap on an approval's status (SELECT ... FOR UPDATE).
+
+        Transitions approval to ``to_status`` ONLY if it currently belongs to ``firm_id``
+        and its status is in ``expect_statuses``. Returns True iff this call performed the
+        transition — so concurrent approvers/resumes cannot move the same approval twice.
+        """
+        now = _utcnow()
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    "SELECT id, doc FROM agent_approvals "
+                    "WHERE id = $1 AND (doc->>'firm_id') = $2 FOR UPDATE",
+                    str(approval_id), str(firm_id),
+                )
+                if row is None:
+                    return False
+                doc = self._doc_from_row(row)
+                if doc.get("status") not in expect_statuses:
+                    return False
+                doc["status"] = to_status
+                for k, v in (set_fields or {}).items():
+                    doc[k] = v
+                doc["updated_at"] = now.isoformat()
+                await conn.execute(
+                    "UPDATE agent_approvals SET doc = $1::jsonb, updated_at = NOW() WHERE id = $2",
+                    json.dumps(doc), str(approval_id),
+                )
+                return True
 
     def __getattr__(self, name: str) -> PostgresCollection:
         if name.startswith("_"):
@@ -890,6 +1135,153 @@ class MemoryDatabase:
             except Exception:
                 self._data.update(backup)
                 raise
+
+    async def claim_agent_run(
+        self,
+        run_id: str,
+        worker_id: str,
+        firm_id: str,
+        lease_seconds: int = DEFAULT_AGENT_LEASE_SECONDS,
+    ) -> Optional[dict]:
+        """Atomic compare-and-swap claim of a single run under the in-memory lock."""
+        now = _utcnow()
+        with self._lock:
+            doc = self._data.setdefault("agent_runs", {}).get(str(run_id))
+            if doc is None or str(doc.get("firm_id")) != str(firm_id):
+                return None
+            status = doc.get("status")
+            lease = _parse_iso(doc.get("lease_expires_at"))
+            owned_by_us = (
+                status == "running"
+                and str(doc.get("worker_id")) == str(worker_id)
+                and lease is not None and lease > now
+            )
+            first_claim = status == "queued"
+            reclaim_dead = status == "running" and (lease is None or lease <= now) and not owned_by_us
+            if not (first_claim or reclaim_dead or owned_by_us):
+                return None
+            result = dict(doc)
+            if not owned_by_us:
+                result["attempt"] = int(result.get("attempt", 0) or 0) + 1
+            result["status"] = "running"
+            result["worker_id"] = str(worker_id)
+            result["started_at"] = result.get("started_at") or now.isoformat()
+            result["heartbeat_at"] = now.isoformat()
+            result["lease_expires_at"] = (now + timedelta(seconds=lease_seconds)).isoformat()
+            result["updated_at"] = now.isoformat()
+            self._data["agent_runs"][str(run_id)] = result
+            out = dict(result)
+            out.pop("_id", None)
+            return out
+
+    async def claim_next_queued_agent_run(
+        self,
+        worker_id: str,
+        firm_id: Optional[str] = None,
+        lease_seconds: int = DEFAULT_AGENT_LEASE_SECONDS,
+    ) -> Optional[dict]:
+        """Atomically pop and claim the oldest queued run (FIFO) under the in-memory lock."""
+        now = _utcnow()
+        with self._lock:
+            col = self._data.setdefault("agent_runs", {})
+            candidates = [
+                (doc.get("created_at") or "", doc.get("id"))
+                for doc in col.values()
+                if doc.get("status") == "queued" and (firm_id is None or str(doc.get("firm_id")) == str(firm_id))
+            ]
+            if not candidates:
+                return None
+            candidates.sort(key=lambda t: (t[0] or "", str(t[1] or "")))
+            run_id = candidates[0][1]
+            doc = col.get(str(run_id))
+            if doc is None:
+                return None
+            result = dict(doc)
+            result["status"] = "running"
+            result["worker_id"] = str(worker_id)
+            result["started_at"] = result.get("started_at") or now.isoformat()
+            result["heartbeat_at"] = now.isoformat()
+            result["lease_expires_at"] = (now + timedelta(seconds=lease_seconds)).isoformat()
+            result["attempt"] = int(result.get("attempt", 0) or 0) + 1
+            result["updated_at"] = now.isoformat()
+            col[str(run_id)] = result
+            out = dict(result)
+            out.pop("_id", None)
+            return out
+
+    async def renew_agent_run_lease(
+        self,
+        run_id: str,
+        worker_id: str,
+        firm_id: str,
+        lease_seconds: int = DEFAULT_AGENT_LEASE_SECONDS,
+    ) -> bool:
+        """Extend the lease for a run held by worker_id; False if not the current holder."""
+        now = _utcnow()
+        with self._lock:
+            doc = self._data.setdefault("agent_runs", {}).get(str(run_id))
+            if doc is None or str(doc.get("firm_id")) != str(firm_id):
+                return False
+            if doc.get("status") != "running" or str(doc.get("worker_id")) != str(worker_id):
+                return False
+            doc["heartbeat_at"] = now.isoformat()
+            doc["lease_expires_at"] = (now + timedelta(seconds=lease_seconds)).isoformat()
+            doc["updated_at"] = now.isoformat()
+            return True
+
+    async def recover_stale_agent_runs(
+        self,
+        max_attempts: int = DEFAULT_AGENT_MAX_ATTEMPTS,
+    ) -> dict:
+        """Requeue or fail running runs whose lease expired (dead worker/crash recovery)."""
+        now = _utcnow()
+        requeued = 0
+        failed = 0
+        with self._lock:
+            col = self._data.setdefault("agent_runs", {})
+            for run_id, doc in list(col.items()):
+                if doc.get("status") != "running":
+                    continue
+                lease = _parse_iso(doc.get("lease_expires_at"))
+                if lease is not None and lease > now:
+                    continue  # live lease owned by another worker
+                attempt = int(doc.get("attempt", 0) or 0)
+                doc["lease_expires_at"] = None
+                doc["worker_id"] = None
+                doc["updated_at"] = now.isoformat()
+                if attempt >= max_attempts:
+                    doc["status"] = "failed"
+                    doc["error"] = "Execution interrupted after maximum recovery attempts."
+                    doc["completed_at"] = now.isoformat()
+                    failed += 1
+                else:
+                    doc["status"] = "queued"
+                    doc["heartbeat_at"] = None
+                    requeued += 1
+        return {"requeued": requeued, "failed": failed}
+
+    async def cas_agent_approval(
+        self,
+        approval_id: str,
+        firm_id: str,
+        expect_statuses: List[str],
+        to_status: str,
+        set_fields: Optional[dict] = None,
+    ) -> bool:
+        """Atomic compare-and-swap on an approval's status under the in-memory lock."""
+        now = _utcnow()
+        with self._lock:
+            col = self._data.setdefault("agent_approvals", {})
+            doc = col.get(str(approval_id))
+            if doc is None or str(doc.get("firm_id")) != str(firm_id):
+                return False
+            if doc.get("status") not in expect_statuses:
+                return False
+            doc["status"] = to_status
+            for k, v in (set_fields or {}).items():
+                doc[k] = v
+            doc["updated_at"] = now.isoformat()
+            return True
 
     def __getattr__(self, name: str) -> MemoryCollection:
         if name.startswith("_"):

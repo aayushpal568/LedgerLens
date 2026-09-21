@@ -635,28 +635,21 @@ async def seed_defaults():
             })
         logger.info("Seeded default checklist templates for default firm")
 
-    # Reconcile orphaned runs and scans from prior server restarts/deployments
-    # V1 Single-Worker / Multi-Worker Guard: only reconcile runs/scans created prior to this boot
-    # instance (at least 60 seconds old) so a newly started worker does not kill live concurrent runs.
+    # Reconcile orphaned runs and scans from prior server restarts/deployments.
+    # LEASE-AWARE durable recovery: only runs whose worker lease has EXPIRED are
+    # requeued for retry (or failed once max attempts are exhausted). A live lease held
+    # by another running worker is never clobbered, so this is safe under concurrency and
+    # after a rolling restart.
+    try:
+        recovery = await services.recover_stale_agent_runs(db=db)
+        if recovery.get("requeued") or recovery.get("failed"):
+            logger.info("Durable agent run recovery on startup: %s", recovery)
+    except Exception as e:
+        logger.warning("Durable agent run recovery skipped: %s", e)
+
     try:
         from datetime import timedelta
         boot_cutoff = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
-
-        all_active_runs = await db.agent_runs.find(
-            {"status": {"$in": ["queued", "running"]}}
-        ).to_list(10000)
-        orphaned_runs = [r for r in all_active_runs if (r.get("created_at") or "") < boot_cutoff]
-        for r in orphaned_runs:
-            await db.agent_runs.update_one(
-                {"id": r["id"]},
-                {"$set": {
-                    "status": "failed",
-                    "error": "Execution interrupted by server restart",
-                    "completed_at": datetime.now(timezone.utc).isoformat(),
-                }},
-            )
-        if orphaned_runs:
-            logger.info("Reconciled %d orphaned agent run(s) as failed", len(orphaned_runs))
 
         all_active_scans = await db.scans.find(
             {"status": {"$in": ["queued", "scanning", "cancelling"]}}
@@ -674,12 +667,26 @@ async def seed_defaults():
         if orphaned_scans:
             logger.info("Reconciled %d orphaned scan(s) as error", len(orphaned_scans))
     except Exception as e:
-        logger.warning("Orphaned run reconciliation skipped: %s", e)
+        logger.warning("Orphaned scan reconciliation skipped: %s", e)
+
+    # Start the durable agent background worker (opt-in; enabled for PostgreSQL backend).
+    try:
+        from agent.worker import start_worker_if_enabled
+        started = await start_worker_if_enabled(db=db)
+        if started:
+            logger.info("Durable agent worker started.")
+    except Exception as e:
+        logger.warning("Durable agent worker failed to start: %s", e)
 
 
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
+    try:
+        from agent.worker import stop_worker
+        await stop_worker()
+    except Exception as e:
+        logger.warning("Agent worker shutdown error: %s", e)
     if db is not None and hasattr(db, "close"):
         res = db.close()
         if asyncio.iscoroutine(res):

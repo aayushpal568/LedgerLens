@@ -712,16 +712,21 @@ async def post_agent_message(
         "completed_at": None,
         "error": None,
         "idempotency_key": clean_idempotency_key,
+        "attempt": 0,
+        "worker_id": None,
+        "lease_expires_at": None,
+        "heartbeat_at": None,
         "metadata": {"initial_message_id": msg_id},
     }
     await database.agent_runs.insert_one(run_doc)
 
-    # 6. Launch background agent loop execution
-    try:
-        from agent.loop import start_agent_run_background
-        start_agent_run_background(user, run_id, target_thread_id, db=database)
-    except Exception as e:
-        logger.warning(f"Could not immediately start background agent loop: {e}")
+    # 6. Launch background agent loop execution (unless a durable worker owns draining).
+    if _inline_dispatch_enabled():
+        try:
+            from agent.loop import start_agent_run_background
+            start_agent_run_background(user, run_id, target_thread_id, db=database)
+        except Exception as e:
+            logger.warning(f"Could not immediately start background agent loop: {e}")
 
     return {
         "run_id": run_id,
@@ -783,6 +788,125 @@ async def cancel_agent_run(user: AuthedUser, run_id: str, db=None) -> dict:
         {"status": RUN_STATUS_CANCELLED, "completed_at": now_iso()},
         db=db,
     )
+
+
+# ----------------------- Durable Agent Worker Primitives -----------------------
+# Stable per-process worker identity for durable run claiming / lease ownership.
+import socket as _socket
+WORKER_ID = f"{_socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(str(os.environ.get(name, "")).strip() or default)
+    except (ValueError, TypeError):
+        return default
+
+
+def agent_lease_seconds() -> int:
+    """Lease (heartbeat) window before a running run is considered dead."""
+    return _env_int("AGENT_LEASE_SECONDS", 120)
+
+
+def agent_run_timeout_seconds() -> int:
+    """Wall-clock maximum execution time for a single agent run."""
+    return _env_int("AGENT_RUN_TIMEOUT_SECONDS", 180)
+
+
+def agent_max_attempts() -> int:
+    """Maximum durable-execution attempts before a stale run is failed permanently."""
+    return _env_int("AGENT_MAX_ATTEMPTS", 3)
+
+
+def agent_max_tool_result_chars() -> int:
+    """Maximum characters of a single tool result retained / fed back to Claude."""
+    return _env_int("AGENT_MAX_TOOL_RESULT_CHARS", 12000)
+
+
+def agent_max_total_output_tokens() -> int:
+    """Aggregate output-token budget across all Claude turns in a single run."""
+    return _env_int("AGENT_MAX_TOTAL_OUTPUT_TOKENS", 8192)
+
+
+def _inline_dispatch_enabled() -> bool:
+    """Whether post_agent_message should also execute the run inline.
+
+    Explicit override via AGENT_INLINE_DISPATCH. Otherwise, when a durable poll worker
+    owns the queue we skip inline dispatch to avoid double execution; in single-process
+    dev mode (worker disabled) we keep the inline fast path.
+    """
+    raw = os.environ.get("AGENT_INLINE_DISPATCH")
+    if raw is not None and raw.strip() != "":
+        return raw.strip().lower() not in ("0", "false", "no", "off")
+    try:
+        from agent.worker import worker_enabled
+        return not worker_enabled()
+    except Exception:
+        return True
+
+
+async def claim_agent_run(user: AuthedUser, run_id: str, db=None) -> Optional[dict]:
+    """Atomically claim a queued (or dead-leased) run for THIS worker.
+
+    firm_id is taken exclusively from the authenticated user context, never from the
+    request/Claude. Returns the claimed run doc, or None if another worker already holds
+    a live lease or the run is terminal (prevents duplicate execution).
+    """
+    database = _get_db(db)
+    return await database.claim_agent_run(
+        run_id=str(run_id).strip(),
+        worker_id=WORKER_ID,
+        firm_id=str(user.firm_id),
+        lease_seconds=agent_lease_seconds(),
+    )
+
+
+async def renew_agent_run_lease(user: AuthedUser, run_id: str, db=None) -> bool:
+    """Heartbeat: extend the lease on a run this worker currently holds."""
+    database = _get_db(db)
+    return await database.renew_agent_run_lease(
+        run_id=str(run_id).strip(),
+        worker_id=WORKER_ID,
+        firm_id=str(user.firm_id),
+        lease_seconds=agent_lease_seconds(),
+    )
+
+
+async def claim_next_queued_agent_run(
+    user: AuthedUser,
+    db=None,
+) -> Optional[dict]:
+    """Atomically claim the oldest queued run for the user's firm (worker poll)."""
+    database = _get_db(db)
+    return await database.claim_next_queued_agent_run(
+        worker_id=WORKER_ID,
+        firm_id=str(user.firm_id),
+        lease_seconds=agent_lease_seconds(),
+    )
+
+
+async def recover_stale_agent_runs(db=None) -> dict:
+    """Requeue/fail running runs whose lease expired (crash & restart recovery)."""
+    database = _get_db(db)
+    return await database.recover_stale_agent_runs(max_attempts=agent_max_attempts())
+
+
+async def run_is_cancelled(run_id: str, user: Optional[AuthedUser] = None, db=None) -> bool:
+    """Server-side cancellation check via persisted status (cross-process authoritative)."""
+    import agent.loop as loop
+    if loop.is_run_cancelled(run_id):
+        return True
+    if user is None:
+        return False
+    try:
+        database = _get_db(db)
+        run = await database.agent_runs.find_one(
+            {"id": str(run_id).strip(), "firm_id": str(user.firm_id)},
+            {"_id": 0},
+        )
+        return bool(run) and run.get("status") == RUN_STATUS_CANCELLED
+    except Exception:
+        return False
 
 
 async def update_agent_run(
@@ -885,3 +1009,15 @@ async def reject_agent_approval(user: AuthedUser, approval_id: str, reason: Opti
     """Reject a pending approval."""
     import agent.approvals as approvals
     return await approvals.reject_approval(user, approval_id, reason=reason, db=db)
+
+
+async def claim_agent_approval_for_execution(user: AuthedUser, approval_id: str, db=None) -> bool:
+    """Atomically claim an approved action for exactly-once server-side execution."""
+    import agent.approvals as approvals
+    return await approvals.claim_for_execution(user, approval_id, db=db)
+
+
+async def mark_agent_approval_failed(user: AuthedUser, approval_id: str, error: Optional[str] = None, db=None) -> dict:
+    """Mark a claimed approval as failed with a safe message."""
+    import agent.approvals as approvals
+    return await approvals.mark_approval_failed(user, approval_id, error=error, db=db)

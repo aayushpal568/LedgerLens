@@ -527,4 +527,216 @@ describe("Phase B: LedgerLens AI Chat UI", () => {
     // No further calls should occur after unmount
     expect(api.getAgentRun.mock.calls.length).toBe(callsBefore);
   });
+
+  // Test 21: Explicit queued -> running -> completed progression + run_id + final answer
+  test("21. Polling walks queued -> running -> completed, uses run_id, shows safe progress and final answer", async () => {
+    api.postAgentMessage.mockResolvedValue({
+      run_id: "run-progress",
+      thread_id: "th-progress",
+      status: "queued",
+    });
+    api.getAgentRun
+      .mockResolvedValueOnce({ id: "run-progress", status: "queued", thread_id: "th-progress" })
+      .mockResolvedValueOnce({ id: "run-progress", status: "running", thread_id: "th-progress" })
+      .mockResolvedValueOnce({ id: "run-progress", status: "completed", thread_id: "th-progress" });
+    api.listAgentRunSteps.mockResolvedValue([
+      { step_type: "tool_call", input_data: { tool: "list_files" } },
+    ]);
+    api.listAgentMessages.mockResolvedValue([
+      { id: "u1", role: "user", text: "Review Acme" },
+      { id: "a1", role: "assistant", text: "Finished reviewing Acme documents." },
+    ]);
+
+    await act(async () => {
+      root.render(<AgentChat />);
+    });
+    const input = container.querySelector('[data-testid="chat-input"]');
+    await act(async () => {
+      typeMessage(input, "Review Acme");
+    });
+    await act(async () => {
+      container.querySelector('[data-testid="send-message-btn"]').click();
+    });
+
+    // Polling uses the run_id returned by POST /api/agent/messages
+    expect(api.getAgentRun).toHaveBeenCalledWith("run-progress");
+
+    // queued -> running (progress derived from a safe step tool name), then completed
+    await act(async () => {
+      jest.advanceTimersByTime(1000);
+    });
+    const indicator = container.querySelector('[data-testid="agent-status-indicator"]');
+    expect(indicator).not.toBeNull();
+    expect(indicator.textContent).toContain("Reviewing client documents");
+
+    await act(async () => {
+      jest.advanceTimersByTime(1000);
+    });
+    expect(container.textContent).toContain("Finished reviewing Acme documents.");
+    expect(container.querySelector('[data-testid="agent-status-indicator"]')).toBeNull();
+  });
+
+  // Test 22: 404 on run polling stops polling with a safe message
+  test("22. A 404 while polling stops polling and shows a safe 'no longer available' message", async () => {
+    const err404 = new Error("Not found");
+    err404.response = { status: 404 };
+    api.postAgentMessage.mockResolvedValue({
+      run_id: "run-404",
+      thread_id: "th-404",
+      status: "queued",
+    });
+    api.getAgentRun.mockRejectedValue(err404);
+
+    await act(async () => {
+      root.render(<AgentChat />);
+    });
+    const input = container.querySelector('[data-testid="chat-input"]');
+    await act(async () => {
+      typeMessage(input, "gone run");
+    });
+    await act(async () => {
+      container.querySelector('[data-testid="send-message-btn"]').click();
+    });
+
+    await act(async () => {
+      jest.advanceTimersByTime(1000);
+    });
+
+    const err = container.querySelector('[data-testid="chat-error"]');
+    expect(err).not.toBeNull();
+    expect(err.textContent).toContain("no longer available");
+    // status internals must not leak
+    expect(err.textContent).not.toContain("Not found");
+
+    // Polling stopped: further timer advances do not add calls
+    const callsAfter = api.getAgentRun.mock.calls.length;
+    await act(async () => {
+      jest.advanceTimersByTime(3000);
+    });
+    expect(api.getAgentRun.mock.calls.length).toBe(callsAfter);
+    expect(container.querySelector('[data-testid="agent-status-indicator"]')).toBeNull();
+  });
+
+  // Test 23: 403 on run polling shows a safe access message
+  test("23. A 403 while polling shows a safe 'no access' message and stops polling", async () => {
+    const err403 = new Error("Forbidden");
+    err403.response = { status: 403 };
+    api.postAgentMessage.mockResolvedValue({
+      run_id: "run-403",
+      thread_id: "th-403",
+      status: "queued",
+    });
+    api.getAgentRun.mockRejectedValue(err403);
+
+    await act(async () => {
+      root.render(<AgentChat />);
+    });
+    const input = container.querySelector('[data-testid="chat-input"]');
+    await act(async () => {
+      typeMessage(input, "forbidden run");
+    });
+    await act(async () => {
+      container.querySelector('[data-testid="send-message-btn"]').click();
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(1000);
+    });
+
+    const err = container.querySelector('[data-testid="chat-error"]');
+    expect(err).not.toBeNull();
+    expect(err.textContent).toContain("no longer have access");
+    expect(err.textContent).not.toContain("Forbidden");
+  });
+
+  // Test 24: Already-actioned approval handled safely (approve -> 404), then completes
+  test("24. Approving an already-actioned approval clears the card and continues polling without a scary error", async () => {
+    const err404 = new Error("already handled");
+    err404.response = { status: 404 };
+    api.postAgentMessage.mockResolvedValue({
+      run_id: "run-appr-done",
+      thread_id: "th-appr-done",
+      status: "queued",
+    });
+    // Keep the run waiting while the card is shown / approve is exercised.
+    api.getAgentRun.mockResolvedValue({ id: "run-appr-done", status: "waiting_for_approval", thread_id: "th-appr-done" });
+    api.listAgentApprovals.mockResolvedValue([
+      { id: "appr-done", tool_name: "run_scan", proposed_args: { client_id: "c-9" }, status: "pending" },
+    ]);
+    api.approveAgentApproval.mockRejectedValue(err404);
+    api.listAgentMessages.mockResolvedValue([
+      { id: "u", role: "user", text: "scan" },
+      { id: "a", role: "assistant", text: "The action was already handled." },
+    ]);
+
+    await act(async () => {
+      root.render(<AgentChat />);
+    });
+    const input = container.querySelector('[data-testid="chat-input"]');
+    await act(async () => {
+      typeMessage(input, "scan please");
+    });
+    await act(async () => {
+      container.querySelector('[data-testid="send-message-btn"]').click();
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(1000);
+    });
+
+    // Approval card present, then approve -> 404 -> card clears, no scary error
+    expect(container.querySelector('[data-testid="approval-card"]')).not.toBeNull();
+    await act(async () => {
+      container.querySelector('[data-testid="approval-approve-btn"]').click();
+    });
+    expect(container.querySelector('[data-testid="approval-card"]')).toBeNull();
+    expect(container.querySelector('[data-testid="chat-error"]')).toBeNull();
+
+    // Switch to completed, then continue polling shows the final assistant message
+    api.getAgentRun.mockResolvedValue({ id: "run-appr-done", status: "completed", thread_id: "th-appr-done" });
+    await act(async () => {
+      jest.advanceTimersByTime(1000);
+    });
+    expect(container.textContent).toContain("The action was already handled.");
+  });
+
+  // Test 25: Safe retry re-sends the last message after a failed run
+  test("25. Retry re-sends the last message via the retry button after a failed run", async () => {
+    api.postAgentMessage.mockResolvedValue({
+      run_id: "run-fail-1",
+      thread_id: "th-fail-1",
+      status: "queued",
+    });
+    api.getAgentRun.mockResolvedValue({
+      id: "run-fail-1",
+      status: "failed",
+      error: "Provider temporarily unavailable",
+    });
+
+    await act(async () => {
+      root.render(<AgentChat />);
+    });
+    const input = container.querySelector('[data-testid="chat-input"]');
+    await act(async () => {
+      typeMessage(input, "Please list my clients");
+    });
+    await act(async () => {
+      container.querySelector('[data-testid="send-message-btn"]').click();
+    });
+    // Poll detects failure, stops, shows error
+    await act(async () => {
+      jest.advanceTimersByTime(1000);
+    });
+    expect(container.querySelector('[data-testid="chat-error"]')).not.toBeNull();
+
+    // Retry button appears; clicking re-sends the same text
+    const retryBtn = container.querySelector('[data-testid="retry-send-btn"]');
+    expect(retryBtn).not.toBeNull();
+    await act(async () => {
+      retryBtn.click();
+    });
+    expect(api.postAgentMessage).toHaveBeenCalledTimes(2);
+    expect(api.postAgentMessage).toHaveBeenLastCalledWith({
+      text: "Please list my clients",
+      thread_id: "th-fail-1",
+    });
+  });
 });
