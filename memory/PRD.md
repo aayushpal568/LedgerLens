@@ -6,7 +6,7 @@ LedgerLens Cloud is a multi-tenant SaaS platform for accounting and audit firms 
 ## Core Guarantees & Non-Negotiables
 - **Human-in-the-Loop**: The platform and AI agent never delete, rename, or alter client accounting files; destructive changes are strictly prohibited.
 - **Tenant Isolation**: Every database query, storage path, API route, and agent tool execution is strictly scoped by `firm_id` with fail-closed security.
-- **Deterministic-First**: Standard digital accounting files (PDFs, Excel spreadsheets, CSVs) are parsed deterministically on the server. External AI/OCR services are only invoked when configured: Baidu Unlimited-OCR for scanned images and Claude Opus for ambiguous document classification and interactive chat.
+- **Deterministic-First**: Standard digital accounting files (PDFs, Excel spreadsheets, CSVs) are parsed deterministically on the server. OCR/AI services are only invoked when configured: local PaddleOCR for scanned images and Claude Opus for ambiguous document classification and interactive chat.
 - **Grounding Safety**: The Claude agent answers questions grounded strictly in validated database facts and tool results, with deterministic checks for entity IDs and finding counts.
 
 ## Architecture
@@ -19,7 +19,7 @@ LedgerLens Cloud is a multi-tenant SaaS platform for accounting and audit firms 
 - **Scan Engine**: Concurrent text extraction, SHA-256 duplicate detection, SequenceMatcher near-duplicate analysis with `autojunk=False`, and checklist matching.
 
 ### External Providers
-- **OCR**: Baidu Unlimited-OCR (OpenAI-compatible vision endpoint) for image-based receipts, invoices, and scanned documents.
+- **OCR**: Local PaddleOCR (pinned to the v2 API) running on the host for image-based receipts, invoices, and scanned documents — no external OCR API dependency.
 - **LLM**: Claude Opus via fal.ai (with optional Anthropic direct fallback) for the conversational accounting agent and ambiguous document categorization.
 - **Extractors**: Local server-side extractors for PDF (PyMuPDF), Word (.docx), Excel (.xlsx), and plain text / CSV.
 

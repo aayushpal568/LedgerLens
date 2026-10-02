@@ -86,6 +86,20 @@ def test_client_get(s, client_id):
     assert r.json()["id"] == client_id
 
 
+def test_client_rejects_blank_name(s):
+    """Regression: a client cannot be created with a blank/whitespace-only name."""
+    assert s.post(f"{BASE}/clients", json={"name": "", "client_type": "Small Business"}).status_code == 422
+    assert s.post(f"{BASE}/clients", json={"name": "   ", "client_type": "Small Business"}).status_code == 422
+    # A valid name with surrounding whitespace is accepted and stored trimmed.
+    r = s.post(f"{BASE}/clients", json={"name": "  Trimmed Co  ", "client_type": "Small Business"})
+    assert r.status_code == 200, r.text
+    cid = r.json()["id"]
+    try:
+        assert r.json()["name"] == "Trimmed Co"
+    finally:
+        s.delete(f"{BASE}/clients/{cid}")
+
+
 # ------------ checklist templates seeded ---
 def test_templates_seeded_and_crud(s):
     r = s.get(f"{BASE}/checklist-templates")
@@ -126,6 +140,48 @@ def test_file_upload_and_list(s, client_id):
     assert r.json()["uploaded"] == 4
     lr = s.get(f"{BASE}/clients/{client_id}/files")
     assert lr.status_code == 200 and len(lr.json()) >= 4
+
+
+def test_file_upload_is_atomic_on_validation_error(s):
+    """Regression: a batch with one invalid file must persist NOTHING (no silent partial upload).
+
+    Previously the upload loop saved files as it iterated, so an invalid file later in the
+    batch left earlier files persisted while the endpoint returned 400 -> duplicates on retry.
+    """
+    cr = s.post(f"{BASE}/clients", json={"name": "TEST_Atomic Upload Inc", "client_type": "Small Business"})
+    assert cr.status_code == 200, cr.text
+    cid = cr.json()["id"]
+    try:
+        good_csv = b"date,amount\n2024-01-01,100\n"
+        png_bytes_named_jpg = b"\x89PNG\r\n\x1a\nthis-is-not-a-jpeg"
+        files = [
+            ("files", ("good_a.csv", io.BytesIO(good_csv), "text/csv")),
+            ("files", ("bad.jpg", io.BytesIO(png_bytes_named_jpg), "image/jpeg")),  # invalid: PNG magic in .jpg
+            ("files", ("good_b.csv", io.BytesIO(good_csv), "text/csv")),
+        ]
+        r = _upload(s, cid, files)
+        assert r.status_code == 400, f"expected 400 for invalid file, got {r.status_code}: {r.text}"
+
+        # Atomicity: NOTHING from the rejected batch should have been persisted.
+        lst = s.get(f"{BASE}/clients/{cid}/files")
+        assert lst.status_code == 200
+        assert len(lst.json()) == 0, (
+            "Non-atomic upload: files persisted despite a 400 batch error -> "
+            f"{[f['name'] for f in lst.json()]}"
+        )
+
+        # Positive control: a fully-valid batch uploads cleanly.
+        files_ok = [
+            ("files", ("ok_a.csv", io.BytesIO(good_csv), "text/csv")),
+            ("files", ("ok_b.csv", io.BytesIO(good_csv), "text/csv")),
+        ]
+        r2 = _upload(s, cid, files_ok)
+        assert r2.status_code == 200, r2.text
+        assert r2.json()["uploaded"] == 2
+        lst2 = s.get(f"{BASE}/clients/{cid}/files").json()
+        assert len(lst2) == 2
+    finally:
+        s.delete(f"{BASE}/clients/{cid}")
 
 
 # --------------- scan pipeline -------------

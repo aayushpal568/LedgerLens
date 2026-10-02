@@ -18,7 +18,7 @@ Secrets are never committed: `deploy/staging.env` (gitignored `*.env`) is create
 3. **Domain + TLS** on your host (e.g. Cloudflare/Let's Encrypt) with a hostname for staging.
 4. Compute host/PaaS that can run `docker compose` and reach the above.
 5. (Optional) A container **registry** to store versioned images for rollback.
-6. (Optional, to exercise agent/OCR) **fal.ai/OpenRouter** key; **Baidu Unlimited-OCR** endpoint+key.
+6. (Optional, to exercise agent) **fal.ai/OpenRouter** key (PaddleOCR runs locally in-process).
 
 ## 2) Values to obtain from each resource
 - Managed PG: `host`, `port` (5432), `database`, `user`, `password`, and confirm SSL.
@@ -46,7 +46,7 @@ Secrets are never committed: `deploy/staging.env` (gitignored `*.env`) is create
 | `TRUST_PROXY`                      | `true` (behind the edge; compose also sets it) |
 | `FAL_KEY` (optional)               | fal.ai/OpenRouter key |
 | `CLAUDE_MODEL` (optional)          | `anthropic/claude-opus-4.6` (default) |
-| `BAIDU_UNLIMITED_OCR_ENDPOINT`/`_API_KEY` (optional) | Baidu OCR endpoint + key |
+| `PADDLE_OCR_USE_GPU` (optional)    | `false` (default) or `true` for GPU |
 
 Notes: R2 bucket stays **private** (the app streams objects by key server-side; no public URL, no CORS on the bucket). Do not set `EMERGENT_LLM_KEY`/`INTEGRATION_PROXY_URL` for the R2 path. The compose file already injects `HOST/PORT/DATA_BACKEND/TRUST_PROXY/AGENT_WORKER_ENABLED`; anything you also put in `staging.env` overrides.
 
@@ -130,7 +130,7 @@ primary manifest). Database backups/snapshots are your managed provider’s resp
 - Cloudflare R2: ~$0–5 (storage + **$0 egress**)
 - Static hosting / CDN + TLS + domain: ~$0–20
 - Claude (fal/OpenRouter): pay-per-token, ~$0–50 (usage-driven; degrades safely if unset)
-- Baidu OCR: pay-per-page, ~$0–20 (usage-driven; optional)
+- PaddleOCR: local in-process, $0 (free, no API cost)
 - CI/CD + secrets + monitoring: ~$0–25
 Indicative total ≈ **$25–140 / mo + usage**.
 

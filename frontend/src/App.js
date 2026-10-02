@@ -1,6 +1,7 @@
-import React from "react";
+import React, { useState } from "react";
 import "@/App.css";
 import { Toaster } from "sonner";
+import { Menu } from "lucide-react";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { AppProvider, useApp } from "@/context/AppContext";
 import AuthScreen from "@/components/AuthScreen";
@@ -17,6 +18,7 @@ import AgentChat from "@/pages/AgentChat";
 
 function Shell() {
   const { tab } = useApp();
+  const [navOpen, setNavOpen] = useState(false);
 
   const pages = {
     dashboard: <Overview />,
@@ -31,8 +33,19 @@ function Shell() {
   return (
     <div className="h-screen flex flex-col bg-background text-foreground">
       <Titlebar />
+      {/* Mobile navigation toggle (hidden on md+ where the sidebar is always shown) */}
+      <button
+        type="button"
+        data-testid="mobile-nav-toggle"
+        aria-expanded={navOpen}
+        aria-label="Toggle navigation"
+        onClick={() => setNavOpen((v) => !v)}
+        className="md:hidden flex items-center gap-2 px-4 py-2 border-b border-border text-sm font-medium text-foreground hover:bg-secondary"
+      >
+        <Menu className="h-4 w-4" /> Menu
+      </button>
       <div className="flex-1 flex min-h-0">
-        <Sidebar />
+        <Sidebar open={navOpen} onClose={() => setNavOpen(false)} />
         <main className="flex-1 min-w-0 overflow-y-auto" data-testid="page-content">
           {pages[tab] || <Overview />}
         </main>

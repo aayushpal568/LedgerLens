@@ -1,7 +1,7 @@
 """Abstract interfaces / ports for the document-processing engine.
 
 Concrete adapters live in `engine.providers`. Keeping these as ABCs ensures the
-engine supports interchangeable storage sources, OCR providers (e.g. Baidu Unlimited-OCR),
+engine supports interchangeable storage sources, OCR providers (e.g. local PaddleOCR),
 and LLM providers (e.g. Claude Opus) without modifying detection logic.
 """
 from abc import ABC, abstractmethod
@@ -40,7 +40,7 @@ class DocumentExtractor(ABC):
 class OCRProvider(ABC):
     """Optical character recognition for images / scanned PDFs.
 
-    Cloud deployment uses Baidu Unlimited-OCR (OpenAI-compatible) when configured,
+    Uses local PaddleOCR on the user machine without external API dependencies,
     or a graceful no-op when unconfigured.
     """
 

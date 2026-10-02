@@ -13,21 +13,47 @@ MONTHS = {
 _YEAR_RE = re.compile(r"(?<!\d)(?:19|20)\d{2}(?!\d)")
 _MONTH_RE = re.compile(r"\b(" + "|".join(MONTHS.keys()) + r")\b")
 
+# Body-text year candidates, evaluated in order of reliability:
+#   1. ISO-style date whose leading group is the year (2024-01-15, 2024/1/5)
+#   2. US/EU-style date whose trailing group is the year (01/15/2024, 15-01-2024)
+#   3. A bare four-digit year that is NOT an identifier fragment.
+# The identifier guard in (3) rejects serial/reference numbers such as
+# "S-2001", "MP-5001" or "INV-1001" (a letter immediately followed by a hyphen
+# right before the digits) as well as a leading digit that makes the run part of
+# a larger number, so an invoice serial is never mistaken for a document year.
+_ISO_DATE_YEAR_RE = re.compile(r"(?<!\d)(?P<y>(?:19|20)\d{2})[-/]\d{1,2}[-/]\d{1,2}(?!\d)")
+_TRAILING_DATE_YEAR_RE = re.compile(r"(?<!\d)\d{1,2}[-/]\d{1,2}[-/](?P<y>(?:19|20)\d{2})(?!\d)")
+_BARE_YEAR_RE = re.compile(r"(?<!\d)(?<![A-Za-z]-)(?P<y>(?:19|20)\d{2})(?!\d)")
+_BODY_YEAR_RES = (_ISO_DATE_YEAR_RE, _TRAILING_DATE_YEAR_RE, _BARE_YEAR_RE)
+
+
+def _year_from_body(body: str):
+    """Best-effort document year from body text, avoiding identifier false years."""
+    for rx in _BODY_YEAR_RES:
+        m = rx.search(body)
+        if m:
+            return int(m.group("y"))
+    return None
+
 
 def detect_period(name: str, text: str):
     """Return {'year': int|None, 'month': int|None} from filename + text.
 
     Prefer a year in the filename because accounting documents commonly include
-    comparative prior-year figures in their body text.
+    comparative prior-year figures in their body text. When falling back to the
+    body, prefer an explicit calendar date and ignore identifier/reference-number
+    fragments (e.g. invoice serial "S-2001") that merely resemble a year.
     """
     filename = (name or "").lower()
     body = (text or "")[:2000].lower()
-    haystack = f"{filename} {body}"
     year = None
-    ym = _YEAR_RE.search(filename) or _YEAR_RE.search(body)
-    if ym:
-        year = int(ym.group(0))
+    fn_year = _YEAR_RE.search(filename)
+    if fn_year:
+        year = int(fn_year.group(0))
+    else:
+        year = _year_from_body(body)
     month = None
+    haystack = f"{filename} {body}"
     mm = _MONTH_RE.search(haystack)
     if mm:
         month = MONTHS[mm.group(1)]

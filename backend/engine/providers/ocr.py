@@ -1,23 +1,19 @@
-"""Baidu Unlimited-OCR provider.
+"""PaddleOCR local optical character recognition provider.
 
-Provides optical character recognition for scanned PDFs and document images
-using Baidu Unlimited-OCR (an open-source, long-horizon document parsing model
-designed for multi-page documents via Reference Sliding Window Attention,
-served via vLLM / SGLang OpenAI-compatible endpoint or Baidu Cloud BCE API).
+Provides local optical character recognition for scanned PDFs and document images
+using PaddleOCR running on the user's machine without external cloud API dependencies.
+Scanned PDFs are processed sequentially one page at a time with explicit memory release.
 """
-import base64
 import logging
 import os
+import threading
 from typing import Callable, Dict, List, Optional
-
-import httpx
 
 from ..interfaces import OCRProvider
 
 logger = logging.getLogger("ledgerlens.ocr")
 
 IMAGE_EXTS = {"jpg", "jpeg", "png", "tiff", "tif", "bmp", "webp"}
-DEFAULT_TIMEOUT = int(os.environ.get("BAIDU_OCR_TIMEOUT") or os.environ.get("LEDGERLENS_OCR_PAGE_TIMEOUT") or "30")
 
 
 class NoOpOCRProvider(OCRProvider):
@@ -31,113 +27,133 @@ class NoOpOCRProvider(OCRProvider):
         return None
 
 
-class BaiduUnlimitedOCRProvider(OCRProvider):
-    """Baidu Unlimited-OCR implementation for document images and scanned PDFs.
+class PaddleOCRProvider(OCRProvider):
+    """Local PaddleOCR implementation for document images and scanned PDFs.
+
+    Features:
+      - Fully local execution; no external paid or cloud OCR APIs.
+      - Defaults to CPU (no GPU required); optional GPU can be enabled via config.
+      - Scanned PDFs are processed sequentially one page at a time:
+          Page 1 -> OCR -> release page memory
+          Page 2 -> OCR -> release page memory
+          ...until the final page.
+      - Preserves page order, page numbers, and partial progress if a subsequent page fails.
+      - Cooperative cancellation support via `should_cancel`.
 
     Configuration (via environment variables or constructor args):
-      - BAIDU_UNLIMITED_OCR_ENDPOINT / BAIDU_OCR_API_URL / BAIDU_OCR_ENDPOINT:
-          Base URL of the Baidu Unlimited-OCR OpenAI-compatible server
-          (e.g., 'http://localhost:8000/v1' or 'https://api.baidu.com/...').
-      - BAIDU_UNLIMITED_OCR_API_KEY / BAIDU_OCR_API_KEY:
-          API key / bearer token (optional if self-hosted without auth, defaults to 'EMPTY').
-      - BAIDU_UNLIMITED_OCR_MODEL / BAIDU_OCR_MODEL:
-          Model name (default: 'baidu/Unlimited-OCR').
-      - BAIDU_API_KEY + BAIDU_SECRET_KEY:
-          Optional Baidu Cloud BCE API Key & Secret Key for Baidu AIP General OCR fallback.
-      - BAIDU_OCR_TIMEOUT / LEDGERLENS_OCR_PAGE_TIMEOUT:
-          Per-request timeout in seconds (default: 30).
+      - PADDLE_OCR_USE_GPU: Set to 'true'/'1' to enable GPU acceleration if CUDA is available (default: False).
+      - PADDLE_OCR_LANG: Language code, e.g. 'en', 'ch' (default: 'en').
+      - PADDLE_OCR_USE_ANGLE_CLS: Set to 'true'/'1' to enable text orientation classifier (default: True).
     """
 
-    name = "baidu_unlimited_ocr"
+    name = "paddle_ocr"
 
     def __init__(
         self,
-        endpoint: Optional[str] = None,
-        api_key: Optional[str] = None,
-        model: Optional[str] = None,
-        baidu_ak: Optional[str] = None,
-        baidu_sk: Optional[str] = None,
-        timeout: Optional[int] = None,
+        use_gpu: Optional[bool] = None,
+        lang: Optional[str] = None,
+        use_angle_cls: Optional[bool] = None,
+        show_log: bool = False,
+        enabled: Optional[bool] = None,
     ):
-        self._endpoint = (
-            endpoint
-            if endpoint is not None
-            else (
-                os.environ.get("BAIDU_UNLIMITED_OCR_ENDPOINT")
-                or os.environ.get("BAIDU_OCR_API_URL")
-                or os.environ.get("BAIDU_OCR_ENDPOINT")
-                or ""
-            )
-        ).rstrip("/")
+        if enabled is not None:
+            self._enabled = enabled
+        else:
+            en_env = os.environ.get("PADDLE_OCR_ENABLED", "true").strip().lower()
+            self._enabled = en_env not in ("0", "false", "no", "off")
 
-        self._api_key = (
-            api_key
-            if api_key is not None
-            else (os.environ.get("BAIDU_UNLIMITED_OCR_API_KEY") or os.environ.get("BAIDU_OCR_API_KEY") or "")
-        )
+        if use_gpu is not None:
+            self._use_gpu = use_gpu
+        else:
+            gpu_env = os.environ.get("PADDLE_OCR_USE_GPU", "").strip().lower()
+            self._use_gpu = gpu_env in ("1", "true", "yes", "on")
 
-        self._model = (
-            model
-            or os.environ.get("BAIDU_UNLIMITED_OCR_MODEL")
-            or os.environ.get("BAIDU_OCR_MODEL")
-            or "baidu/Unlimited-OCR"
-        )
+        self._lang = lang or os.environ.get("PADDLE_OCR_LANG", "en")
 
-        self._baidu_ak = (
-            baidu_ak
-            if baidu_ak is not None
-            else (os.environ.get("BAIDU_API_KEY") or os.environ.get("BAIDU_OCR_AK") or "")
-        )
-        self._baidu_sk = (
-            baidu_sk
-            if baidu_sk is not None
-            else (os.environ.get("BAIDU_SECRET_KEY") or os.environ.get("BAIDU_OCR_SK") or "")
-        )
+        if use_angle_cls is not None:
+            self._use_angle_cls = use_angle_cls
+        else:
+            cls_env = os.environ.get("PADDLE_OCR_USE_ANGLE_CLS", "true").strip().lower()
+            self._use_angle_cls = cls_env in ("1", "true", "yes", "on")
 
-        self._timeout = timeout or DEFAULT_TIMEOUT
-        self._bce_token: Optional[str] = None
+        self._show_log = show_log
+        self._ocr = None
+        self._available_cache: Optional[bool] = None
+        # The PaddleOCR predictor is NOT thread-safe: concurrent ocr() calls on a
+        # shared instance produce cross-contaminated / aliased results. The scan
+        # engine runs per-file extraction on a thread pool, so we serialize every
+        # inference call through this lock and guard lazy initialization separately.
+        self._lock = threading.Lock()
+        self._init_lock = threading.Lock()
 
     @property
     def available(self) -> bool:
-        """Available if a valid endpoint is set, an API key is set, or Baidu BCE AK/SK are provided."""
-        return bool(self._endpoint or (self._baidu_ak and self._baidu_sk))
+        """Returns True if paddleocr and paddle are installed and importable."""
+        if not self._enabled:
+            return False
+        if self._available_cache is not None:
+            return self._available_cache
+        try:
+            import paddleocr
+            import paddle  # noqa: F401
+            self._available_cache = True
+            return True
+        except Exception as e:
+            logger.debug("PaddleOCR not available: %s", e)
+            self._available_cache = False
+            return False
+
+    def _get_ocr(self):
+        """Lazily initialize a single shared PaddleOCR instance (thread-safe)."""
+        if self._ocr is None:
+            with self._init_lock:
+                if self._ocr is None:
+                    try:
+                        from paddleocr import PaddleOCR
+                        self._ocr = PaddleOCR(
+                            use_angle_cls=self._use_angle_cls,
+                            lang=self._lang,
+                            use_gpu=self._use_gpu,
+                            show_log=self._show_log,
+                        )
+                    except Exception as e:
+                        logger.error("Failed to initialize PaddleOCR engine: %s", e)
+                        return None
+        return self._ocr
 
     def get_config_summary(self) -> Dict[str, str]:
-        """Return a safe summary of the current OCR configuration without revealing secrets."""
-        masked_key = (
-            (self._api_key[:3] + "..." + self._api_key[-3:])
-            if len(self._api_key) > 6
-            else ("***" if self._api_key else "none")
-        )
-        masked_ak = (
-            (self._baidu_ak[:3] + "..." + self._baidu_ak[-3:])
-            if len(self._baidu_ak) > 6
-            else ("***" if self._baidu_ak else "none")
-        )
-        mode = (
-            "openai_compatible"
-            if self._endpoint
-            else ("baidu_bce" if (self._baidu_ak and self._baidu_sk) else "not_configured")
-        )
+        """Return a safe summary of the current OCR configuration."""
         return {
             "provider": self.name,
             "available": str(self.available),
-            "mode": mode,
-            "endpoint": self._endpoint or "none",
-            "model": self._model,
-            "api_key_configured": str(bool(self._api_key)),
-            "api_key_masked": masked_key,
-            "baidu_ak_configured": str(bool(self._baidu_ak)),
-            "baidu_ak_masked": masked_ak,
-            "timeout": str(self._timeout),
+            "mode": "local",
+            "use_gpu": str(self._use_gpu),
+            "lang": self._lang,
+            "use_angle_cls": str(self._use_angle_cls),
         }
 
+    def _parse_ocr_result(self, result) -> Optional[str]:
+        """Parse raw PaddleOCR detection and recognition results into clean text."""
+        if not result:
+            return None
+        lines: List[str] = []
+        for page_res in result:
+            if not page_res:
+                continue
+            for line in page_res:
+                if line and len(line) >= 2 and isinstance(line[1], (list, tuple)):
+                    text = line[1][0]
+                    if text and str(text).strip():
+                        lines.append(str(text).strip())
+        if not lines:
+            return None
+        return "\n".join(lines)
+
     def extract(self, path: str, ext: str, should_cancel: Optional[Callable] = None) -> Optional[str]:
-        """Recognize text from an image or scanned PDF using Baidu Unlimited-OCR."""
+        """Recognize text from an image or scanned PDF using local PaddleOCR."""
         if not self.available:
             logger.warning(
-                "Baidu Unlimited-OCR requested for %s, but provider is not configured. "
-                "Set BAIDU_UNLIMITED_OCR_ENDPOINT or BAIDU_OCR_API_URL in environment.",
+                "PaddleOCR requested for %s, but PaddleOCR is not installed or available.",
                 path,
             )
             return None
@@ -155,139 +171,112 @@ class BaiduUnlimitedOCRProvider(OCRProvider):
             logger.warning("Unsupported file format for OCR: .%s", clean_ext)
             return None
         except Exception as e:
-            logger.error("Baidu Unlimited-OCR failed on %s: %s", path, e, exc_info=True)
+            logger.error("PaddleOCR failed on %s: %s", path, e, exc_info=True)
             return None
 
     def _extract_image(self, path: str) -> Optional[str]:
-        with open(path, "rb") as f:
-            img_bytes = f.read()
-        if not img_bytes:
+        """Extract text from a standalone image file."""
+        ocr = self._get_ocr()
+        if ocr is None:
             return None
-        ext = path.rsplit(".", 1)[-1].lower() if "." in path else "png"
-        return self._send_ocr_request(img_bytes, fmt=ext)
+        try:
+            from PIL import Image
+            with Image.open(path) as img:
+                img.verify()
+        except Exception as img_err:
+            logger.warning("Corrupted or unreadable image file %s: %s", path, img_err)
+            return None
+
+        try:
+            with self._lock:
+                res = ocr.ocr(path, cls=self._use_angle_cls)
+            return self._parse_ocr_result(res)
+        except Exception as e:
+            logger.error("PaddleOCR image extraction error for %s: %s", path, e)
+            return None
 
     def _extract_pdf(self, path: str, should_cancel: Optional[Callable] = None) -> Optional[str]:
+        """Process scanned PDFs strictly one page at a time.
+
+        Page 1 -> OCR -> release page memory
+        Page 2 -> OCR -> release page memory
+        ...until the final page.
+
+        Preserves page order and page numbers.
+        Preserves successfully processed pages if a later page fails.
+        """
         try:
             import fitz  # PyMuPDF
         except ImportError:
             logger.error("PyMuPDF (fitz) is required for PDF OCR page rendering.")
             return None
 
-        doc = fitz.open(path)
+        import gc
+        import numpy as np
+
+        ocr = self._get_ocr()
+        if ocr is None:
+            return None
+
+        doc = None
         pages_text: List[str] = []
         try:
-            for page_idx in range(len(doc)):
+            doc = fitz.open(path)
+            total_pages = len(doc)
+            for page_idx in range(total_pages):
                 if should_cancel and should_cancel():
-                    logger.info("OCR extraction cancelled by caller.")
+                    logger.info(
+                        "PaddleOCR extraction cancelled by caller at page %d/%d.",
+                        page_idx + 1,
+                        total_pages,
+                    )
                     break
-                page = doc[page_idx]
-                pix = page.get_pixmap(dpi=150)
-                img_bytes = pix.tobytes("png")
-                page_text = self._send_ocr_request(img_bytes, fmt="png")
-                if page_text and page_text.strip():
-                    pages_text.append(page_text.strip())
+
+                pix = None
+                page = None
+                img_np = None
+                img_arr = None
+                try:
+                    import cv2
+                    page = doc.load_page(page_idx)
+                    pix = page.get_pixmap(dpi=150)
+                    # PyMuPDF renders in RGB; PaddleOCR consumes BGR (matches both the
+                    # cv2.imread image path and PaddleOCR's own PDF renderer). Build a
+                    # contiguous, writable BGR array rather than passing the read-only
+                    # RGB frombuffer view straight through.
+                    img_arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape((pix.h, pix.w, pix.n))
+                    if pix.n == 4:
+                        img_np = np.ascontiguousarray(cv2.cvtColor(img_arr, cv2.COLOR_RGBA2BGR))
+                    elif pix.n == 1:
+                        img_np = np.ascontiguousarray(cv2.cvtColor(img_arr, cv2.COLOR_GRAY2BGR))
+                    else:  # pix.n == 3 (RGB)
+                        img_np = np.ascontiguousarray(cv2.cvtColor(img_arr, cv2.COLOR_RGB2BGR))
+
+                    if not img_np.flags["WRITEABLE"]:
+                        img_np = img_np.copy()
+
+                    with self._lock:
+                        ocr_res = ocr.ocr(img_np, cls=self._use_angle_cls)
+                    page_str = self._parse_ocr_result(ocr_res)
+                    if page_str and page_str.strip():
+                        pages_text.append(f"--- Page {page_idx + 1} ---\n{page_str.strip()}")
+                except Exception as page_err:
+                    logger.warning("PaddleOCR error on page %d of %s: %s", page_idx + 1, path, page_err)
+                    # Crucial: preserve already extracted pages even if later pages fail
+                finally:
+                    del pix
+                    del page
+                    del img_np
+                    del img_arr
+                    gc.collect()
+        except Exception as pdf_err:
+            logger.error("PaddleOCR failed to open/process PDF %s: %s", path, pdf_err)
         finally:
-            doc.close()
+            if doc is not None:
+                doc.close()
 
         if not pages_text:
             return None
         return "\n\n".join(pages_text)
-
-    def _send_ocr_request(self, img_bytes: bytes, fmt: str) -> Optional[str]:
-        if self._endpoint:
-            return self._call_openai_compatible(img_bytes, fmt)
-        if self._baidu_ak and self._baidu_sk:
-            return self._call_baidu_bce(img_bytes)
-        return None
-
-    def _call_openai_compatible(self, img_bytes: bytes, fmt: str) -> Optional[str]:
-        target_url = self._endpoint
-        if not target_url.endswith("/chat/completions"):
-            target_url = f"{target_url}/chat/completions"
-
-        mime = "jpeg" if fmt in ("jpg", "jpeg") else ("png" if fmt == "png" else "octet-stream")
-        b64 = base64.b64encode(img_bytes).decode("utf-8")
-        data_uri = f"data:image/{mime};base64,{b64}"
-
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self._api_key or 'EMPTY'}",
-        }
-
-        # Baidu Unlimited-OCR expects prompt with <image>
-        payload = {
-            "model": self._model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "<image>document parsing."},
-                        {"type": "image_url", "image_url": {"url": data_uri}},
-                    ],
-                }
-            ],
-            "max_tokens": 4096,
-            "temperature": 0.0,
-        }
-
-        try:
-            with httpx.Client(timeout=float(self._timeout)) as client:
-                resp = client.post(target_url, json=payload, headers=headers)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    choices = data.get("choices") or []
-                    if choices:
-                        msg = choices[0].get("message") or {}
-                        content = msg.get("content") or ""
-                        return content.strip() or None
-                else:
-                    logger.error("Baidu Unlimited-OCR server returned HTTP %d: %s", resp.status_code, resp.text)
-                    return None
-        except Exception as e:
-            logger.error("HTTP error calling Baidu Unlimited-OCR: %s", e)
-            return None
-
-    def _call_baidu_bce(self, img_bytes: bytes) -> Optional[str]:
-        token = self._get_bce_access_token()
-        if not token:
-            return None
-        url = f"https://aip.baidubce.com/rest/2.0/ocr/v1/general_basic?access_token={token}"
-        b64 = base64.b64encode(img_bytes).decode("utf-8")
-        headers = {"Content-Type": "application/x-www-form-urlencoded"}
-        data = {"image": b64}
-
-        try:
-            with httpx.Client(timeout=float(self._timeout)) as client:
-                resp = client.post(url, data=data, headers=headers)
-                if resp.status_code == 200:
-                    res_json = resp.json()
-                    words = [w.get("words", "") for w in res_json.get("words_result", []) if w.get("words")]
-                    return "\n".join(words).strip() or None
-                else:
-                    logger.error("Baidu BCE OCR returned HTTP %d: %s", resp.status_code, resp.text)
-                    return None
-        except Exception as e:
-            logger.error("HTTP error calling Baidu BCE OCR: %s", e)
-            return None
-
-    def _get_bce_access_token(self) -> Optional[str]:
-        if self._bce_token:
-            return self._bce_token
-        url = (
-            f"https://aip.baidubce.com/oauth/2.0/token"
-            f"?grant_type=client_credentials&client_id={self._baidu_ak}&client_secret={self._baidu_sk}"
-        )
-        try:
-            with httpx.Client(timeout=10.0) as client:
-                resp = client.post(url)
-                if resp.status_code == 200:
-                    token = resp.json().get("access_token")
-                    self._bce_token = token
-                    return token
-                logger.error("Failed to acquire Baidu BCE token: %s", resp.text)
-                return None
-        except Exception as e:
-            logger.error("Baidu BCE token request failed: %s", e)
-            return None
 
 

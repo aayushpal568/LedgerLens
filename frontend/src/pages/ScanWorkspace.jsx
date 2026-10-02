@@ -3,6 +3,7 @@ import { useApp } from "@/context/AppContext";
 import { api } from "@/lib/api";
 import { Button, Card, Select, Label, Badge, EmptyState, Spinner } from "@/components/ui";
 import { formatBytes } from "@/lib/utils";
+import { startScanPolling } from "@/lib/scanPolling";
 import { toast } from "sonner";
 import {
   FolderSearch, UploadCloud, FileText, Trash2, Play, ShieldAlert, CheckCircle2,
@@ -49,26 +50,27 @@ export default function ScanWorkspace() {
   }, [activeClient, loadFiles]);
 
   const pollScan = useCallback((scanId) => {
-    clearInterval(pollRef.current);
-    pollRef.current = setInterval(async () => {
-      try {
-        const s = await api.getScan(scanId);
-        setScan(s);
-        if (["completed", "cancelled", "error"].includes(s.status)) {
-          clearInterval(pollRef.current);
-          setActiveScan(s);
-          if (s.status === "completed") toast.success(`Scan complete — ${s.total_findings} exceptions found`);
-          else if (s.status === "cancelled") toast("Scan cancelled");
-          else toast.error("Scan failed");
-        }
-      } catch {
-        clearInterval(pollRef.current);
-        toast.error("Lost connection to the scan service");
-      }
-    }, 1000);
+    if (pollRef.current) pollRef.current.stop();
+    pollRef.current = startScanPolling({
+      scanId,
+      getScan: api.getScan,
+      onState: (s) => setScan(s),
+      onDone: (s) => {
+        setActiveScan(s);
+        if (s.status === "completed") toast.success(`Scan complete — ${s.total_findings} exceptions found`);
+        else if (s.status === "cancelled") toast("Scan cancelled");
+        else toast.error("Scan failed");
+      },
+      onError: (msg) => {
+        // Give up only after a run of consecutive transient failures (see scanPolling).
+        // Drop the "running" spinner state so the UI is not left stuck.
+        setScan((prev) => (prev ? { ...prev, status: "error" } : prev));
+        toast.error(msg);
+      },
+    });
   }, [setActiveScan]);
 
-  useEffect(() => () => clearInterval(pollRef.current), []);
+  useEffect(() => () => { if (pollRef.current) pollRef.current.stop(); }, []);
 
   const doUpload = async (fileList) => {
     if (!activeClient) return toast.error("Select a client first");

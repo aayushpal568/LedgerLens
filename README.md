@@ -11,7 +11,7 @@ LedgerLens Cloud is engineered for reliable, multi-tenant SaaS deployment:
 - **Object Storage**: S3/Cloudflare R2-compatible storage via `boto3` offloaded from the async event loop, with fallback to local storage in development.
 - **AI & OCR Providers**:
   - **Deterministic Fast Path**: Native digital PDFs, CSVs, Excel workbooks, and DOCX files are extracted locally without external API latency or costs.
-  - **Baidu Unlimited-OCR**: OpenAI-compatible vision OCR endpoint for scanned receipts, invoices, and image documents when configured.
+  - **PaddleOCR**: Local optical character recognition for scanned receipts, invoices, and image documents running directly on the host machine without external API dependencies or costs.
   - **Claude Opus (fal.ai / Anthropic direct)**: Powers the conversational accounting agent and handles ambiguous document classification fallback with bounded turn budgets and factual grounding checks.
 
 ---
@@ -40,7 +40,7 @@ AWS_REGION=auto
 S3_ENDPOINT_URL=https://<account-id>.r2.cloudflarestorage.com
 
 # OCR & AI Services (Optional / As Needed)
-BAIDU_OCR_API_KEY=your-baidu-ocr-key
+# PADDLE_OCR_USE_GPU=false
 FAL_KEY=your-fal-ai-api-key
 ```
 

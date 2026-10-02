@@ -99,10 +99,14 @@ def test_noop_llm_provider_safe():
 
 
 def test_build_default_engine_uses_safe_providers():
-    with patch.dict(os.environ, {"FAL_KEY": "", "FAL_API_KEY": "", "ANTHROPIC_API_KEY": ""}, clear=False):
+    with patch.dict(os.environ, {"FAL_KEY": "", "FAL_API_KEY": "", "ANTHROPIC_API_KEY": "", "PADDLE_OCR_ENABLED": "false"}, clear=False):
         engine = build_default_engine()
         assert engine.ocr is not None
         assert engine.llm is not None
         assert engine.ocr.available is False
         assert engine.llm.available is False
+
+    engine_local = build_default_engine()
+    assert engine_local.ocr.name == "paddle_ocr"
+    assert engine_local.ocr.available is True
 

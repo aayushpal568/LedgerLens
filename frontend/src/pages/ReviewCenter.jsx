@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useApp } from "@/context/AppContext";
 import { api } from "@/lib/api";
 import { Button, Card, Select, Input, Badge, Textarea, EmptyState, ConfidenceBadge, Spinner } from "@/components/ui";
@@ -31,6 +31,12 @@ export default function ReviewCenter() {
   const [filterCat, setFilterCat] = useState("all");
   const [filterStatus, setFilterStatus] = useState("all");
   const [search, setSearch] = useState("");
+  // Track which finding the note box is currently "for", so we only re-seed the
+  // textarea when the user switches to a DIFFERENT finding — never when the same
+  // finding's object identity changes (e.g. after a status toggle calls
+  // setSelected(updated)). This prevents a typed-but-unsaved note being wiped
+  // the instant the reviewer clicks Keep/Ignore/Review-later.
+  const noteLoadedForId = useRef(null);
 
   const scanId = activeScan?.id;
 
@@ -62,7 +68,16 @@ export default function ReviewCenter() {
 
   useEffect(() => { loadScans(); }, [loadScans]);
   useEffect(() => { loadFindings(); }, [loadFindings]);
-  useEffect(() => { setNote(selected?.note || ""); }, [selected]);
+  useEffect(() => {
+    // Re-seed the note textarea only when the reviewer switches to a different
+    // finding. Same-finding identity changes (status toggle -> setSelected(updated))
+    // must NOT clobber an in-progress, unsaved note.
+    const id = selected?.id ?? null;
+    if (id !== noteLoadedForId.current) {
+      noteLoadedForId.current = id;
+      setNote(selected?.note || "");
+    }
+  }, [selected]);
 
   const counts = useMemo(() => {
     const c = {};

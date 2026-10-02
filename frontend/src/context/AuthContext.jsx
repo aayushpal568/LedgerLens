@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import { api, setAccessToken, setRefreshToken, getRefreshToken, setOnUnauthorized } from "@/lib/api";
 
 const AuthContext = createContext(null);
@@ -55,14 +55,21 @@ export function AuthProvider({ children }) {
   }, []);
 
   // Rehydrate session on initial mount / page reload (F5)
+  // Guard against double-invocation: React.StrictMode (dev/staging) runs effects
+  // mount→unmount→mount, which would fire api.refresh twice with the SAME stored
+  // refresh token. Because refresh tokens rotate (and the old one is invalidated),
+  // the second call 401s and the failure handler logs the user out — breaking the
+  // advertised "session survives F5" behavior. Fire the rehydration exactly once.
+  const rehydratedRef = useRef(false);
   useEffect(() => {
-    if (isTest) return;
+    if (isTest || rehydratedRef.current) return;
+    rehydratedRef.current = true;
     const storedRefresh = typeof getRefreshToken === "function" ? getRefreshToken() : null;
     if (storedRefresh) {
       setIsLoading(true);
       api
         .refresh({ refresh_token: storedRefresh })
-        .then((data) => {
+        .then(async (data) => {
           if (typeof setAccessToken === "function") {
             setAccessToken(data.access_token);
           }
@@ -70,8 +77,11 @@ export function AuthProvider({ children }) {
             setRefreshToken(data.refresh_token);
           }
           setToken(data.access_token);
-          setUser(data.user);
-          setFirm(data.firm);
+          // /auth/refresh returns tokens only — hydrate the identity from
+          // /auth/me so the session actually survives a page reload (F5).
+          const me = await api.getMe();
+          setUser(me?.user || data.user || null);
+          setFirm(me?.firm || data.firm || null);
         })
         .catch(() => {
           if (typeof setAccessToken === "function") setAccessToken(null);

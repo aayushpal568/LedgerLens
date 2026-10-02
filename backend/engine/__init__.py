@@ -14,7 +14,7 @@ from .interfaces import FileSource, DocumentExtractor, OCRProvider, LLMProvider
 from .scan_engine import ScanEngine, build_default_engine
 from .providers import (
     LocalPathFileSource, LocalDirectoryFileSource, DefaultDocumentExtractor,
-    NoOpOCRProvider, BaiduUnlimitedOCRProvider, NoOpLLMProvider, ClaudeOpusFalProvider,
+    NoOpOCRProvider, PaddleOCRProvider, NoOpLLMProvider, ClaudeOpusFalProvider,
 )
 
 __all__ = [
@@ -23,7 +23,7 @@ __all__ = [
     "FileSource", "DocumentExtractor", "OCRProvider", "LLMProvider",
     "ScanEngine", "build_default_engine",
     "LocalPathFileSource", "LocalDirectoryFileSource", "DefaultDocumentExtractor",
-    "NoOpOCRProvider", "BaiduUnlimitedOCRProvider", "NoOpLLMProvider",
+    "NoOpOCRProvider", "PaddleOCRProvider", "NoOpLLMProvider",
     "ClaudeOpusFalProvider",
 ]
 

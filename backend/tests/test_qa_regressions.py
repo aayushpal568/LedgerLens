@@ -25,6 +25,60 @@ def test_period_detection_accepts_underscores_and_prefers_filename():
     assert period["year"] == 2024
 
 
+def test_period_detection_ignores_identifier_serials_in_body():
+    """Regression: an internal serial like 'S-2001' must not be read as the year.
+
+    A sales register whose only pre-2024 four-digit run is an invoice serial
+    (S-2001/S-2002) but whose real dates are all 2024 must resolve to 2024,
+    not 2001 (which previously produced a false wrong-period exception).
+    """
+    body = (
+        "Invoice No Customer Date Amount S-2001 Retail One 2024-01-10 10000 "
+        "S-2002 Retail Two 2024-01-18 7500 S-2003 Retail Three 2024-02-05 12000"
+    )
+    # Filename carries no year, so the body heuristic decides.
+    assert detect_period("sales_register.xlsx", body)["year"] == 2024
+    # Even with no calendar date, a bare year glued to a lettered prefix (an
+    # identifier) is ignored; a genuinely free-standing year is still honored.
+    assert detect_period("misc.pdf", "Ref MP-2001 MP-2002 totals for 2019")["year"] == 2019
+
+
+def test_scan_does_not_flag_serial_number_file_as_wrong_period(tmp_path):
+    """End-to-end regression through ScanEngine (noop providers, no OCR/LLM)."""
+    from engine.scan_engine import ScanEngine
+    from engine.providers import (
+        DefaultDocumentExtractor, NoOpOCRProvider, NoOpLLMProvider, LocalPathFileSource,
+    )
+
+    csv_path = tmp_path / "sales_register.csv"
+    csv_path.write_text(
+        "Invoice No,Customer,Date,Amount\n"
+        "S-2001,Retail One,2024-01-10,10000\n"
+        "S-2002,Retail Two,2024-01-18,7500\n",
+        encoding="utf-8",
+    )
+    old_path = tmp_path / "old_invoice.csv"
+    old_path.write_text(
+        "Invoice No,Customer,Date,Amount\nOLD-5,Retail Five,2019-03-12,900\n",
+        encoding="utf-8",
+    )
+    records = [
+        {"id": "r-1", "name": csv_path.name, "ext": "csv", "size": csv_path.stat().st_size, "path": str(csv_path)},
+        {"id": "r-2", "name": old_path.name, "ext": "csv", "size": old_path.stat().st_size, "path": str(old_path)},
+    ]
+
+    ocr = NoOpOCRProvider()
+    engine = ScanEngine(DefaultDocumentExtractor(ocr), ocr, NoOpLLMProvider())
+    result = engine.run(LocalPathFileSource(records), checklist_items=[], expected_period=2024)
+
+    wrong = [f for f in result["findings"] if f["category"] == "wrong_period"]
+    flagged_names = {w["files"][0]["name"] for w in wrong}
+    # The 2024 register must NOT be flagged; the real 2019 invoice must be.
+    assert "sales_register.csv" not in flagged_names
+    assert flagged_names == {"old_invoice.csv"}
+    assert wrong[0]["evidence"]["detected_year"] == 2019
+
+
 def test_reports_escape_markup_and_spreadsheet_formulas():
     from openpyxl import load_workbook
 

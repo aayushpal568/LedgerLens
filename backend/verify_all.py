@@ -311,36 +311,38 @@ def test_end_to_end_integration():
         print("  [PASS] Full End-to-End Flow: Client -> Upload -> Process -> Detect -> Review -> PDF Report")
 
 
-def test_baidu_unlimited_ocr_integration():
-    print("\n--- 4. Testing Baidu Unlimited-OCR Provider & Pipeline ---")
+def test_paddle_ocr_integration():
+    print("\n--- 4. Testing Local PaddleOCR Provider & Pipeline ---")
     from unittest.mock import patch, MagicMock
     from PIL import Image, ImageDraw
-    from engine.providers import BaiduUnlimitedOCRProvider, DefaultDocumentExtractor
+    import fitz
+    from engine.providers import PaddleOCRProvider, DefaultDocumentExtractor
     from engine.models import STATUS_OK, STATUS_NEEDS_OCR
 
-    # Test 1: Initialization without credentials (graceful unconfigured state)
-    provider_unconfigured = BaiduUnlimitedOCRProvider(endpoint="", api_key="")
-    assert provider_unconfigured.available is False
-    summary = provider_unconfigured.get_config_summary()
-    assert summary["available"] == "False"
-    assert summary["mode"] == "not_configured"
-    print("  [PASS] Baidu Unlimited-OCR initialization & safe defaults")
+    # Test 1: Initialization with default CPU configuration
+    provider = PaddleOCRProvider()
+    assert provider.name == "paddle_ocr"
+    assert provider.available is True
+    summary = provider.get_config_summary()
+    assert summary["provider"] == "paddle_ocr"
+    assert summary["available"] == "True"
+    assert summary["mode"] == "local"
+    assert summary["use_gpu"] == "False"
+    assert summary["lang"] == "en"
+    assert summary["use_angle_cls"] == "True"
+    print("  [PASS] PaddleOCR initialization and safe CPU defaults")
 
-    # Test 2: Configuration handling and credential masking
-    provider_configured = BaiduUnlimitedOCRProvider(
-        endpoint="https://ocr.ledgerlens.cloud/v1",
-        api_key="super_secret_baidu_api_token_xyz123",
-        model="baidu/Unlimited-OCR"
-    )
-    assert provider_configured.available is True
-    cfg = provider_configured.get_config_summary()
-    assert cfg["available"] == "True"
-    assert cfg["mode"] == "openai_compatible"
-    assert "super_secret_baidu_api_token_xyz123" not in cfg["api_key_masked"]
-    assert cfg["api_key_masked"].startswith("sup...")
-    print("  [PASS] Authentication & configuration handling with credential masking")
+    # Test 2: Environment variable overrides (GPU / language)
+    env = {"PADDLE_OCR_USE_GPU": "true", "PADDLE_OCR_LANG": "ch", "PADDLE_OCR_USE_ANGLE_CLS": "false"}
+    with patch.dict(os.environ, env, clear=False):
+        prov_env = PaddleOCRProvider()
+        cfg = prov_env.get_config_summary()
+        assert cfg["use_gpu"] == "True"
+        assert cfg["lang"] == "ch"
+        assert cfg["use_angle_cls"] == "False"
+    print("  [PASS] Configuration handling for GPU and language overrides")
 
-    # Test 3: Unconfigured extraction fails gracefully without crashing
+    # Test 3: Graceful handling when OCR is unavailable
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_img = Path(tmpdir) / "invoice_receipt.png"
         img = Image.new("RGB", (300, 150), color=(255, 255, 255))
@@ -348,53 +350,76 @@ def test_baidu_unlimited_ocr_integration():
         d.text((10, 10), "Receipt 2024", fill=(0, 0, 0))
         img.save(tmp_img)
 
-        # Unconfigured provider returns None
-        assert provider_unconfigured.extract(str(tmp_img), "png") is None
+        provider_unavailable = PaddleOCRProvider()
+        provider_unavailable._available_cache = False
+        assert provider_unavailable.extract(str(tmp_img), "png") is None
 
-        # Document extractor reports clear 'OCR not configured' reason
-        extractor_unconfigured = DefaultDocumentExtractor(provider_unconfigured)
-        ext_res = extractor_unconfigured.extract(str(tmp_img), "png")
+        extractor_unavail = DefaultDocumentExtractor(provider_unavailable)
+        ext_res = extractor_unavail.extract(str(tmp_img), "png")
         assert ext_res.status == STATUS_NEEDS_OCR
+        assert ext_res.ocr_used is False
         assert "OCR is not configured" in ext_res.reason
-        print("  [PASS] Graceful handling & clear reporting when OCR is unconfigured")
+        assert "paddle_ocr" in ext_res.reason
+        print("  [PASS] Graceful handling and clear reporting when OCR is unavailable")
 
-        # Test 4: Real image extraction with mocked Baidu Unlimited-OCR endpoint
-        fake_ocr_resp = MagicMock()
-        fake_ocr_resp.status_code = 200
-        fake_ocr_resp.json.return_value = {
-            "choices": [
-                {
-                    "message": {
-                        "content": "# INVOICE\nVendor: AWS Cloud\nTotal: $1,250.00\nYear: 2024"
-                    }
-                }
+        # Test 4: Image extraction with mocked OCR engine
+        mock_ocr = MagicMock()
+        mock_ocr.ocr.return_value = [
+            [
+                [[[10, 10], [100, 10], [100, 30], [10, 30]], ("Vendor: AWS Cloud", 0.99)],
+                [[[10, 40], [100, 40], [100, 60], [10, 60]], ("Total: $1,250.00", 0.98)],
             ]
-        }
-
-        with patch("httpx.Client.post", return_value=fake_ocr_resp):
-            text = provider_configured.extract(str(tmp_img), "png")
+        ]
+        with patch.object(provider, "_get_ocr", return_value=mock_ocr):
+            text = provider.extract(str(tmp_img), "png")
             assert text is not None and "AWS Cloud" in text
-            print("  [PASS] Real image OCR extraction via OpenAI-compatible endpoint")
+            print("  [PASS] Image OCR extraction via PaddleOCR")
 
             # Test 5: OCR text reaches document processing pipeline
-            extractor_configured = DefaultDocumentExtractor(provider_configured)
-            pipeline_res = extractor_configured.extract(str(tmp_img), "png")
+            extractor = DefaultDocumentExtractor(provider)
+            pipeline_res = extractor.extract(str(tmp_img), "png")
             assert pipeline_res.status == STATUS_OK
             assert pipeline_res.ocr_used is True
-            assert pipeline_res.meta.get("ocr") == "baidu_unlimited_ocr"
+            assert pipeline_res.meta.get("ocr") == "paddle_ocr"
             assert "AWS Cloud" in pipeline_res.text
             print("  [PASS] OCR text seamlessly feeds into document pipeline (status=OK, ocr_used=True)")
 
-        # Test 6: Network / server error handled cleanly
-        fake_err_resp = MagicMock()
-        fake_err_resp.status_code = 502
-        fake_err_resp.text = "Bad Gateway"
-        with patch("httpx.Client.post", return_value=fake_err_resp):
-            err_res = extractor_configured.extract(str(tmp_img), "png")
-            assert err_res.status == STATUS_NEEDS_OCR
-            assert err_res.ocr_used is False
-            assert "OCR processing failed" in err_res.reason
-            print("  [PASS] OCR server failure handled cleanly without crashing")
+        # Test 6: Scanned PDF sequential one-page-at-a-time processing
+        tmp_pdf = Path(tmpdir) / "scanned_doc.pdf"
+        doc = fitz.open()
+        p1 = doc.new_page(width=300, height=150)
+        p1.insert_image(fitz.Rect(0, 0, 300, 150), filename=str(tmp_img))
+        p2 = doc.new_page(width=300, height=150)
+        p2.insert_image(fitz.Rect(0, 0, 300, 150), filename=str(tmp_img))
+        doc.save(str(tmp_pdf))
+        doc.close()
+
+        mock_pdf_ocr = MagicMock()
+        mock_pdf_ocr.ocr.side_effect = [
+            [[[[[0, 0], [10, 0], [10, 10], [0, 10]], ("Page 1 Invoice", 0.95)]]],
+            [[[[[0, 0], [10, 0], [10, 10], [0, 10]], ("Page 2 Appendix", 0.96)]]],
+        ]
+        with patch.object(provider, "_get_ocr", return_value=mock_pdf_ocr):
+            pdf_text = provider.extract(str(tmp_pdf), "pdf")
+            assert "--- Page 1 ---" in pdf_text
+            assert "Page 1 Invoice" in pdf_text
+            assert "--- Page 2 ---" in pdf_text
+            assert "Page 2 Appendix" in pdf_text
+            assert mock_pdf_ocr.ocr.call_count == 2
+            print("  [PASS] Sequential page-by-page PDF OCR with memory bounds")
+
+        # Test 7: PDF preserves successfully processed pages on subsequent page failure
+        mock_partial_ocr = MagicMock()
+        mock_partial_ocr.ocr.side_effect = [
+            [[[[[0, 0], [10, 0], [10, 10], [0, 10]], ("Page 1 Success", 0.95)]]],
+            RuntimeError("Simulated OOM on page 2"),
+        ]
+        with patch.object(provider, "_get_ocr", return_value=mock_partial_ocr):
+            partial_text = provider.extract(str(tmp_pdf), "pdf")
+            assert "--- Page 1 ---" in partial_text
+            assert "Page 1 Success" in partial_text
+            assert "--- Page 2 ---" not in partial_text
+            print("  [PASS] Preserves earlier pages if subsequent page fails")
 
 
 def test_claude_opus_fal_integration():
@@ -550,7 +575,7 @@ if __name__ == "__main__":
     test_backend_api_and_database()
     test_core_engine_realistic_files()
     test_end_to_end_integration()
-    test_baidu_unlimited_ocr_integration()
+    test_paddle_ocr_integration()
     test_claude_opus_fal_integration()
     if RUN_LIVE_CLAUDE:
         test_opt_in_live_claude()

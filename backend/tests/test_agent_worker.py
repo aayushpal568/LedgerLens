@@ -185,6 +185,14 @@ def test_concurrent_fifo_drain_no_double_claim():
 def test_worker_process_next_queued_run_drains_and_executes():
     async def _test():
         u = _user()
+        # Make the FIFO drain hermetic and runner-independent: `process_next_queued_run`
+        # claims the OLDEST queued run cross-tenant, so any runs left 'queued' by other
+        # tests in the shared in-memory DB would be drained in its place (this failed only
+        # in full-suite serial runs; passed standalone and under -n2 loadscope). Drain that
+        # backlog to empty first so THIS test's run is deterministically the next claim.
+        for _ in range(500):
+            if (await process_next_queued_run(llm_provider=FakeProvider(responses=[_final("backlog drain")]))) is None:
+                break
         res = await services.post_agent_message(u, "worker drain", db=server.db)
         run_id, thread_id = res["run_id"], res["thread_id"]
         provider = FakeProvider(responses=[_final("Handled by durable worker.")])

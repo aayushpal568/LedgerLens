@@ -9,7 +9,7 @@ from typing import List, Optional
 
 from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException, Request, Depends, Header
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from starlette.middleware.cors import CORSMiddleware
 
 from engine import run_detection, default_templates, SUPPORTED_EXTENSIONS
@@ -149,6 +149,14 @@ class ClientCreate(BaseModel):
     name: str
     client_type: str = "Small Business"
     notes: Optional[str] = ""
+
+    @field_validator("name")
+    @classmethod
+    def _name_required(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("Client name is required and cannot be blank.")
+        return v
 
 
 class ChecklistItem(BaseModel):
@@ -303,7 +311,10 @@ async def upload_files(
         raise HTTPException(400, f"Maximum {MAX_FILES_PER_BATCH} files allowed per upload batch.")
 
     total_batch_size = 0
-    saved = []
+    staged = []
+    # Pass 1: read + validate EVERY file before persisting anything. This keeps the
+    # batch atomic: a single invalid/oversized file aborts with a clear error and
+    # leaves NO partially-uploaded files behind (which previously would duplicate on retry).
     for uf in files:
         fname = os.path.basename(uf.filename or "unnamed")
 
@@ -322,9 +333,13 @@ async def upload_files(
             chunks.append(chunk)
 
         content = b"".join(chunks)
-        # Validate extension, magic bytes, and reject disguised executables before storage
+        # Validate extension, magic bytes, and reject disguised executables BEFORE any storage write
         validate_file_content(fname, content)
+        staged.append((fname, content))
 
+    # Pass 2: all files validated OK -> now persist them.
+    saved = []
+    for fname, content in staged:
         doc = await services.save_client_file(
             current_user, client_id, fname, content, db=db
         )
