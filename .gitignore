@@ -92,3 +92,15 @@ credentials.json
 *.key
 .credentials
 backend/uploads/
+
+# Obsolete desktop/Tauri + PyInstaller build output (purged from history; never recommit)
+desktop/
+backend/build/
+**/target/
+**/binaries/
+release/*.exe
+release/*.msi
+release/*.zip
+*.pdb
+*.rlib
+*.rmeta
