@@ -1,2 +1,0 @@
-Date,Amount,Vendor,Formula
-2024-01-01,100.00,Exact Vendor,=SUM(A1:A2)
