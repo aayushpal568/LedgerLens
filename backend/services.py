@@ -339,14 +339,35 @@ async def _run_scan(
             {"client_id": client_id, "firm_id": firm_id, "is_deleted": {"$ne": True}}
         ).to_list(100000)
         records = []
+        download_failures = []
         for f in file_docs:
+            fname = f.get("name") or f["id"]
             local_path = os.path.join(tmpdir, f"{f['id']}.{f.get('ext') or 'bin'}")
-            try:
-                data = await asyncio.to_thread(storage.get_object, f["storage_path"])
-                with open(local_path, "wb") as out:
-                    out.write(data)
-            except Exception:  # noqa: BLE001
-                pass
+            data = None
+            # Retry TRANSIENT storage errors a few times; a genuinely missing object
+            # (FileNotFoundError) is not retried. On persistent failure we MUST NOT append
+            # a phantom record: writing nothing to local_path and still listing the file makes
+            # the detection engine treat an unreadable document as an empty file, producing
+            # FALSE 'missing'/'duplicate' findings. Excluding it (and surfacing it as skipped)
+            # is the correctness-critical part of this fix.
+            for attempt in range(3):
+                try:
+                    data = await asyncio.to_thread(storage.get_object, f["storage_path"])
+                    break
+                except FileNotFoundError:
+                    download_failures.append({"name": fname, "reason": "Document not found in storage"})
+                    logger.warning("scan %s: file %s (%s) missing in storage; excluding from detection", scan_id, f["id"], fname)
+                    break
+                except Exception as e:  # noqa: BLE001 - transient storage/network error
+                    if attempt == 2:
+                        download_failures.append({"name": fname, "reason": "Could not read document from storage"})
+                        logger.exception("scan %s: file %s (%s) storage read failed after retries; excluding from detection", scan_id, f["id"], fname)
+                    else:
+                        await asyncio.sleep(0.5 * (attempt + 1))
+            if data is None:
+                continue
+            with open(local_path, "wb") as out:
+                out.write(data)
             records.append({"id": f["id"], "name": f["name"], "ext": f["ext"], "size": f["size"], "path": local_path})
 
         items = await _load_items(template_id, firm_id, db)
@@ -359,6 +380,12 @@ async def _run_scan(
             run_detection, records, items, expected_period, on_progress,
             lambda: scan_id in CANCEL_REQUESTS,
         )
+        # Surface documents we could not read from storage as skipped (same {name, reason}
+        # shape the engine uses), so firms see why a file was excluded instead of a silent gap.
+        if download_failures:
+            result.setdefault("skipped", [])
+            result["skipped"].extend(download_failures)
+            result["total"] = result.get("total", 0) + len(download_failures)
         await _finalize_scan(scan_id, firm_id, client_id, result, db)
     except Exception as e:  # noqa: BLE001
         logger.exception("scan failed: %s", e)
@@ -888,7 +915,18 @@ async def claim_next_queued_agent_run(
 async def recover_stale_agent_runs(db=None) -> dict:
     """Requeue/fail running runs whose lease expired (crash & restart recovery)."""
     database = _get_db(db)
-    return await database.recover_stale_agent_runs(max_attempts=agent_max_attempts())
+    result = await database.recover_stale_agent_runs(max_attempts=agent_max_attempts())
+    # Also reconcile consequential-action approvals stranded in 'executing' by a crash
+    # between claim_for_execution and mark_executed/failed (A5). Best-effort: never block
+    # run recovery if this fails.
+    try:
+        ttl = max(300, agent_lease_seconds())
+        approvals = await database.recover_stuck_agent_approvals(ttl_seconds=ttl)
+        result["approvals_failed"] = approvals.get("failed", 0)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Stuck-approval reconciliation skipped: %s", e)
+        result["approvals_failed"] = 0
+    return result
 
 
 async def run_is_cancelled(run_id: str, user: Optional[AuthedUser] = None, db=None) -> bool:

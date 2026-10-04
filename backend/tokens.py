@@ -49,7 +49,12 @@ def decode_access_token(token: str) -> Dict[str, Any]:
     Raises jwt.ExpiredSignatureError or jwt.PyJWTError on failure.
     """
     secret_key = get_auth_secret_key()
-    return jwt.decode(token, secret_key, algorithms=["HS256"])
+    return jwt.decode(
+        token,
+        secret_key,
+        algorithms=["HS256"],
+        options={"require": ["exp"]},
+    )
 
 
 def hash_refresh_token(raw_token: str) -> str:

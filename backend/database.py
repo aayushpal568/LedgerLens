@@ -821,6 +821,43 @@ class PostgresDatabase:
                     )
         return {"requeued": requeued, "failed": failed}
 
+    async def recover_stuck_agent_approvals(self, ttl_seconds: int = 300) -> dict:
+        """Fail approvals stranded in 'executing' after a mid-action crash.
+
+        ``claim_for_execution`` atomically moves an approval ``approved -> executing`` and
+        the API process then runs the consequential tool and calls mark_executed/failed. If
+        the process crashes between the claim and that finalization, the approval is left in
+        'executing' forever — the action is neither completed nor visibly failed. Once the
+        execution window has clearly elapsed (``ttl_seconds`` since the claim), we reconcile
+        such approvals to a terminal 'failed' state so a human can re-approve instead of the
+        run hanging indefinitely. Only 'executing' rows are touched; legitimate 'pending' /
+        'approved' items are left untouched. Returns {'failed': n}.
+        """
+        now = _utcnow()
+        failed = 0
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                rows = await conn.fetch(
+                    "SELECT id, doc FROM agent_approvals "
+                    "WHERE (doc->>'status') = 'executing' "
+                    "FOR UPDATE SKIP LOCKED"
+                )
+                for row in rows:
+                    doc = self._doc_from_row(row)
+                    claimed = _parse_iso(doc.get("execution_claimed_at")) or _parse_iso(doc.get("updated_at"))
+                    if claimed is None or (now - claimed).total_seconds() < ttl_seconds:
+                        continue  # still within the execution window — do not disturb a live executor
+                    doc["status"] = "failed"
+                    doc["failed_at"] = now.isoformat()
+                    doc["execution_error"] = "Execution was interrupted before completion. Please retry."
+                    doc["updated_at"] = now.isoformat()
+                    failed += 1
+                    await conn.execute(
+                        "UPDATE agent_approvals SET doc = $1::jsonb, updated_at = NOW() WHERE id = $2",
+                        json.dumps(doc), str(row["id"]),
+                    )
+        return {"failed": failed}
+
     async def cas_agent_approval(
         self,
         approval_id: str,
@@ -1259,6 +1296,32 @@ class MemoryDatabase:
                     doc["heartbeat_at"] = None
                     requeued += 1
         return {"requeued": requeued, "failed": failed}
+
+    async def recover_stuck_agent_approvals(self, ttl_seconds: int = 300) -> dict:
+        """Fail approvals stranded in 'executing' after a mid-action crash (in-memory store).
+
+        Mirrors the Postgres recovery: a consequential action whose executing process died
+        between claim_for_execution (approved -> executing) and mark_executed/failed would
+        otherwise strand the approval in 'executing' forever. Once the execution window has
+        elapsed we move such approvals to a terminal 'failed' state so they can be re-approved.
+        Only 'executing' items are touched. Returns {'failed': n}.
+        """
+        now = _utcnow()
+        failed = 0
+        with self._lock:
+            col = self._data.setdefault("agent_approvals", {})
+            for _aid, doc in list(col.items()):
+                if doc.get("status") != "executing":
+                    continue
+                claimed = _parse_iso(doc.get("execution_claimed_at")) or _parse_iso(doc.get("updated_at"))
+                if claimed is None or (now - claimed).total_seconds() < ttl_seconds:
+                    continue  # still within the execution window
+                doc["status"] = "failed"
+                doc["failed_at"] = now.isoformat()
+                doc["execution_error"] = "Execution was interrupted before completion. Please retry."
+                doc["updated_at"] = now.isoformat()
+                failed += 1
+        return {"failed": failed}
 
     async def cas_agent_approval(
         self,

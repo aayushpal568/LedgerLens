@@ -196,7 +196,8 @@ def delete_object(path: str) -> bool:
         try:
             _s3_client.delete_object(Bucket=s3_bucket, Key=path)
             return True
-        except Exception:
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Failed to delete object '%s' from S3/R2 bucket '%s': %s", path, s3_bucket, e)
             return False
 
     if _use_local_fallback or key == "local":
@@ -205,12 +206,17 @@ def delete_object(path: str) -> bool:
             try:
                 target.unlink()
                 return True
-            except Exception:
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Failed to delete local object '%s': %s", path, e)
                 return False
         return True
 
     try:
         resp = requests.delete(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=30)
-        return resp.status_code in (200, 204, 404)
-    except Exception:
+        if resp.status_code not in (200, 204, 404):
+            logger.warning("Failed to delete object '%s' via storage proxy: HTTP %s", path, resp.status_code)
+            return False
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Failed to delete object '%s' via storage proxy: %s", path, e)
         return False

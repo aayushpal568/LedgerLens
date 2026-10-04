@@ -657,8 +657,8 @@ async def seed_defaults():
     # after a rolling restart.
     try:
         recovery = await services.recover_stale_agent_runs(db=db)
-        if recovery.get("requeued") or recovery.get("failed"):
-            logger.info("Durable agent run recovery on startup: %s", recovery)
+        if recovery.get("requeued") or recovery.get("failed") or recovery.get("approvals_failed"):
+            logger.info("Durable agent recovery on startup: %s", recovery)
     except Exception as e:
         logger.warning("Durable agent run recovery skipped: %s", e)
 
