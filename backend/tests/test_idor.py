@@ -193,17 +193,33 @@ def test_agent_action_tools_cross_tenant():
 # ===========================================================================
 # 3. Password Reset Flow Tests
 # ===========================================================================
-def test_password_reset_flow(client):
+def test_password_reset_flow(client, monkeypatch):
+    import auth_routes
+
     email = f"reset_{uuid.uuid4().hex[:6]}@example.com"
     data, _ = _signup(client, email, "Reset Firm", password="OldPassword123!")
     user_id = data["user"]["id"]
+
+    # The raw token is delivered OUT OF BAND (never in the HTTP response). Capture it via the
+    # delivery seam so this test can still exercise the end-to-end reset flow.
+    captured = {}
+
+    def _capture(_email, _raw_token):
+        captured["email"] = _email
+        captured["token"] = _raw_token
+
+    monkeypatch.setattr(auth_routes, "_deliver_reset_token", _capture)
 
     # 1. Request password reset
     forgot_res = client.post("/api/auth/forgot-password", json={"email": email})
     assert forgot_res.status_code == 200
     reset_data = forgot_res.json()
-    assert "reset_token" in reset_data
-    token = reset_data["reset_token"]
+    # A2: the raw reset token must NEVER be exposed in the response.
+    assert "reset_token" not in reset_data
+    assert "message" in reset_data
+    assert captured.get("email") == email
+    token = captured["token"]
+    assert token  # a token was generated and dispatched out of band
 
     # 2. Reset password with valid token
     reset_res = client.post("/api/auth/reset-password", json={"token": token, "new_password": "NewSecurePassword456!"})

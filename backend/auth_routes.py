@@ -71,6 +71,13 @@ LOGIN_MAX_ATTEMPTS = int(os.environ.get("LOGIN_MAX_ATTEMPTS", "5"))
 LOGIN_WINDOW_SECONDS = int(os.environ.get("LOGIN_WINDOW_SECONDS", "900"))
 login_limiter = LoginRateLimiter(max_attempts=LOGIN_MAX_ATTEMPTS, window_seconds=LOGIN_WINDOW_SECONDS)
 
+# Separate throttle for the UNAUTHENTICATED password-reset request endpoint (A2): without it
+# /forgot-password is a free enumeration + token-generation oracle. Same (email, IP) keying
+# as login; every request counts toward the window.
+FORGOT_PASSWORD_MAX_ATTEMPTS = int(os.environ.get("FORGOT_PASSWORD_MAX_ATTEMPTS", "5"))
+FORGOT_PASSWORD_WINDOW_SECONDS = int(os.environ.get("FORGOT_PASSWORD_WINDOW_SECONDS", "900"))
+forgot_limiter = LoginRateLimiter(max_attempts=FORGOT_PASSWORD_MAX_ATTEMPTS, window_seconds=FORGOT_PASSWORD_WINDOW_SECONDS)
+
 
 # ---------------------------------------------------------------------------
 # Models
@@ -120,6 +127,18 @@ def _throttle_key(email: str, ip: str) -> str:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _deliver_reset_token(email: str, raw_token: str) -> None:
+    """Dispatch a password-reset token OUT OF BAND (production: transactional email).
+
+    Security (A2): the raw token must NEVER be returned in an HTTP response — doing so lets
+    anyone who calls /forgot-password immediately take over the matching account. This is the
+    seam where a real mailer/SMS provider plugs in. It intentionally does NOT log the token or
+    the email. Tests capture the token by monkeypatching this function.
+    """
+    # Placeholder for the email provider. Do not log email or token.
+    logger.info("Password-reset token dispatched via the configured delivery channel.")
 
 
 # ---------------------------------------------------------------------------
@@ -401,10 +420,15 @@ async def me(current_user: AuthedUser = Depends(get_current_user)):
 
 @auth_router.post("/forgot-password")
 async def forgot_password(body: ForgotPasswordRequest, request: Request):
-    """Generate a secure password reset token valid for 1 hour.
+    """Request a password reset: generate a secure 1-hour token and deliver it OUT OF BAND.
 
-    In production SaaS, this token is dispatched via email. For test/development
-    visibility, the reset_token is included in the response payload.
+    Security (A2):
+    - The raw token is NEVER included in this response. Returning it would turn an
+      unauthenticated endpoint into an instant account-takeover primitive, regardless of the
+      deployment ENVIRONMENT. It is dispatched via _deliver_reset_token (email in production).
+    - The response is always the same generic message so the endpoint cannot be used to
+      enumerate which accounts exist.
+    - The request is throttled per (email, IP) to blunt abuse and token-generation spam.
     """
     import hashlib
     import secrets
@@ -414,9 +438,18 @@ async def forgot_password(body: ForgotPasswordRequest, request: Request):
         raise HTTPException(status_code=500, detail="Database not initialized")
 
     email_clean = body.email.lower().strip()
-    user = await db.users.find_one({"email": email_clean})
+    ip = _client_ip(request)
+    key = _throttle_key(email_clean, ip)
 
-    raw_token = None
+    if forgot_limiter.is_throttled(key):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many password reset requests. Please try again later.",
+        )
+    # Count every request against the window (unauthenticated endpoint — no "success" to reset on).
+    forgot_limiter.record_failure(key)
+
+    user = await db.users.find_one({"email": email_clean})
     if user:
         raw_token = secrets.token_urlsafe(32)
         token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
@@ -429,14 +462,12 @@ async def forgot_password(body: ForgotPasswordRequest, request: Request):
                 "reset_token_expires_at": expires_at,
             }}
         )
+        # Deliver the raw token out of band. It is intentionally never returned here.
+        _deliver_reset_token(email_clean, raw_token)
 
-    response = {
-        "message": "If an account with that email exists, password reset instructions have been generated.",
+    return {
+        "message": "If an account with that email exists, password reset instructions have been sent.",
     }
-    if raw_token and os.environ.get("ENVIRONMENT", "development") != "production":
-        response["reset_token"] = raw_token
-
-    return response
 
 
 @auth_router.post("/reset-password")

@@ -179,3 +179,75 @@ def test_run_scan_excludes_unreadable_files_and_surfaces_them_as_skipped(monkeyp
         assert scan_after.get("total_files") == 3
         assert scan_after.get("processed_files") == 1
     asyncio.run(_test())
+
+
+# =========================================================================
+# A2 — password-reset token is never exposed; endpoint is throttled
+# =========================================================================
+import auth_routes  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+
+
+@pytest.fixture
+def client():
+    with TestClient(server.app) as c:
+        yield c
+
+
+def _signup_user(client, email, password="OldPassword123!"):
+    resp = client.post(
+        "/api/auth/signup",
+        json={"email": email, "password": password, "firm_name": "A2 Firm", "name": "A2 Admin"},
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()["user"]["id"]
+
+
+def test_forgot_password_never_exposes_token(client, monkeypatch):
+    email = f"a2_{uuid.uuid4().hex[:8]}@example.com"
+    uid = _signup_user(client, email)
+
+    captured = {}
+    monkeypatch.setattr(auth_routes, "_deliver_reset_token", lambda e, t: captured.update(email=e, token=t))
+
+    res = client.post("/api/auth/forgot-password", json={"email": email})
+    assert res.status_code == 200
+    body = res.json()
+    # CRITICAL (A2): the raw token must NEVER be returned in the HTTP response.
+    assert "reset_token" not in body
+    assert "message" in body
+    # The token was still generated and delivered OUT OF BAND + stored (hashed).
+    assert captured.get("email") == email and captured.get("token")
+    import hashlib
+
+    stored = server.db.users.find_one({"id": uid})
+    # Support both a coroutine (memory) and dict return defensively not needed; memory is sync-awaitable.
+    expected_hash = hashlib.sha256(captured["token"].encode("utf-8")).hexdigest()
+    assert _run_async(stored).get("reset_token_hash") == expected_hash
+
+
+def test_forgot_password_no_enumeration(client):
+    bogus = f"a2_missing_{uuid.uuid4().hex[:8]}@example.com"
+    res = client.post("/api/auth/forgot-password", json={"email": bogus})
+    assert res.status_code == 200
+    body = res.json()
+    assert "reset_token" not in body
+    assert "message" in body
+
+
+def test_forgot_password_throttled(client):
+    email = f"a2_throttle_{uuid.uuid4().hex[:8]}@example.com"
+    _signup_user(client, email)
+    max_attempts = auth_routes.FORGOT_PASSWORD_MAX_ATTEMPTS
+
+    statuses = [
+        client.post("/api/auth/forgot-password", json={"email": email}).status_code
+        for _ in range(max_attempts + 1)
+    ]
+    assert statuses[0] != 429, "the first request must not be throttled"
+    assert 429 in statuses, f"expected a 429 within {max_attempts + 1} requests, got {statuses}"
+
+
+def _run_async(value):
+    """Await a coroutine if the collection returned one (memory/postgres parity)."""
+    return asyncio.run(value) if asyncio.iscoroutine(value) else value
