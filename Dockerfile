@@ -8,10 +8,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies (curl, build tooling, and the OpenCV/PaddleOCR native libs
+# required for scanned-document OCR — without these, `import cv2` fails with
+# ImportError: libxcb.so.1 and OCR silently degrades to unavailable).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     build-essential \
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
+    libxcb1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install pinned Python dependencies
