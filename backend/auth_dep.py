@@ -6,6 +6,7 @@ from fastapi import Depends, Header, HTTPException, status
 import jwt
 
 from tokens import decode_access_token
+from request_context import bind_auth_context  # A11: correlation-only logging context
 
 
 @dataclass(frozen=True)
@@ -109,9 +110,13 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    return AuthedUser(
+    authed = AuthedUser(
         user_id=str(user["id"]),
         firm_id=str(user["firm_id"]),
         token_version=int(user.get("token_version", 1)),
         email=str(user.get("email", "")),
     )
+    # A11: attach tenant ids to the log context for this request. Correlation only — it
+    # runs after every auth check and cannot influence the authentication outcome.
+    bind_auth_context(authed.user_id, authed.firm_id)
+    return authed

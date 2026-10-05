@@ -83,6 +83,12 @@ api_router = APIRouter(prefix="/api", dependencies=[Depends(get_current_user)])
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+# A11: correlation + structured logging (request id / user / firm on every line).
+from request_context import RequestContextMiddleware, configure_logging  # noqa: E402
+
+_LOG_MODE = "json" if (ENVIRONMENT == "production" or os.environ.get("LOG_FORMAT", "").strip().lower() == "json") else "text"
+configure_logging(_LOG_MODE)
+
 import services
 
 CANCEL_REQUESTS = services.CANCEL_REQUESTS
@@ -635,6 +641,10 @@ if config_error_cors is None and "CORS_ALLOWED_ORIGINS" in locals():
         allow_headers=["*"],
     )
 
+# A11: outermost ASGI middleware — assigns/echoes a request id and emits one structured
+# access log line per request (added last so it is the first to run).
+app.add_middleware(RequestContextMiddleware)
+
 
 @app.on_event("startup")
 async def seed_defaults():
@@ -644,9 +654,23 @@ async def seed_defaults():
         raise RuntimeError("Database instance is not initialized.")
     if hasattr(db, "init"):
         await db.init()
+    # A11: expose asyncpg pool saturation (gauges only — no per-acquire timing).
     try:
+        _pool = getattr(db, "_pg_pool", None)
+        if _pool is not None and hasattr(_pool, "get_size"):
+            logger.info(
+                "Database pool gauges",
+                extra={"extra_fields": {"pool_size": _pool.get_size(), "pool_idle": _pool.get_idle_size()}},
+            )
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"Pool gauge collection skipped: {e}")
+    try:
+        _storage_t0 = time.perf_counter()
         storage.init_storage()
-        logger.info("Object storage initialized")
+        logger.info(
+            "Object storage initialized",
+            extra={"extra_fields": {"storage_init_ms": round((time.perf_counter() - _storage_t0) * 1000, 2)}},
+        )
     except Exception as e:  # noqa: BLE001
         logger.warning(f"Storage init deferred/unavailable: {e}")
 
