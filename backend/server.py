@@ -631,11 +631,12 @@ async def health_check():
 
 @app.get("/readyz")
 async def readiness_check():
-    """Readiness probe: 503 when the database (a hard dependency) is unreachable.
+    """Readiness probe: 503 when the database OR object storage is unavailable.
 
-    Separate from /healthz so a transient DB blip can gate traffic / mark the instance
-    not-ready without being read as a liveness failure. DB-gated only (storage is
-    intentionally not probed here — see B2). Exposes only coarse status; no secrets."""
+    Separate from /healthz (pure liveness). Checks both hard dependencies — the DB and
+    object storage — via non-mutating probes (a DB count ping and storage.storage_readiness,
+    which never touches object data and exposes only a coarse token). Reports only coarse
+    status strings; no secrets, DSNs, buckets, endpoints, or keys are ever included."""
     db_healthy = False
     if db is not None:
         try:
@@ -644,12 +645,16 @@ async def readiness_check():
         except Exception:
             db_healthy = False
 
+    storage_state = storage.storage_readiness()  # "ok" | "unconfigured" | "error"
+    ready = db_healthy and storage_state == "ok"
+
     body = {
-        "status": "ready" if db_healthy else "not_ready",
+        "status": "ready" if ready else "not_ready",
         "service": "ledgerlens",
         "database": "connected" if db_healthy else "unreachable",
+        "storage": storage_state,
     }
-    return JSONResponse(status_code=200 if db_healthy else 503, content=body)
+    return JSONResponse(status_code=200 if ready else 503, content=body)
 
 
 

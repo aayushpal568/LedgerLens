@@ -123,6 +123,23 @@ def init_storage(force: bool = False) -> str:
     )
 
 
+def storage_readiness() -> str:
+    """Coarse, NON-mutating object-storage readiness token for /readyz (B2 Option B).
+
+    Returns only one of the fixed strings "ok" | "unconfigured" | "error". It NEVER
+    returns an identifier, key, bucket, endpoint, DSN, or any secret. init_storage() is
+    memoized and performs no object read/write (for the S3 path it only constructs a
+    client), so this is a safe, side-effect-free readiness signal.
+    """
+    try:
+        mode = init_storage()
+    except RuntimeError:
+        return "unconfigured"
+    except Exception:
+        return "error"
+    return "ok" if mode else "error"
+
+
 def put_object(path: str, data: bytes, content_type: str) -> dict:
     key = init_storage()
 

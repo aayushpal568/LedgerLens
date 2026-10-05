@@ -18,6 +18,7 @@ os.environ.setdefault("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:30
 os.environ["AGENT_WORKER_ENABLED"] = "false"
 
 import server  # noqa: E402
+import storage  # noqa: E402
 
 
 @pytest.fixture
@@ -75,3 +76,73 @@ def test_probes_do_not_leak_secrets(client, monkeypatch):
     lowered = joined.lower()
     for needle in ("postgresql://", "password", "auth_secret", "secret_key", "stack", "traceback"):
         assert needle not in lowered
+
+
+# ====================== B2 Option B: storage in /readyz ======================
+def test_readyz_503_when_storage_down_but_db_healthy(client, monkeypatch):
+    monkeypatch.setattr(storage, "storage_readiness", lambda: "unconfigured")
+    r = client.get("/readyz")
+    assert r.status_code == 503
+    body = r.json()
+    assert body["status"] == "not_ready"
+    assert body["database"] == "connected", "DB is healthy; only storage should drive 503"
+    assert body["storage"] == "unconfigured"
+    # liveness unaffected by a dependency outage
+    assert client.get("/healthz").status_code == 200
+
+
+def test_readyz_503_when_db_and_storage_both_down(client, monkeypatch):
+    async def boom(*a, **k):
+        raise RuntimeError("simulated DB outage")
+
+    monkeypatch.setattr(server.db.firm, "count_documents", boom)
+    monkeypatch.setattr(storage, "storage_readiness", lambda: "unconfigured")
+
+    r = client.get("/readyz")
+    assert r.status_code == 503
+    body = r.json()
+    assert body["status"] == "not_ready"
+    assert body["database"] == "unreachable"
+    assert body["storage"] == "unconfigured"
+    assert client.get("/healthz").status_code == 200, "liveness stays 200 regardless of readiness"
+
+
+def test_readyz_200_when_db_and_storage_healthy(client):
+    # memory backend → storage resolves to local 'ok'
+    r = client.get("/readyz")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ready"
+    assert body["database"] == "connected"
+    assert body["storage"] == "ok"
+
+
+def test_storage_readiness_token_mapping(monkeypatch):
+    def ret(mode):
+        def _f(*a, **k):
+            return mode
+        return _f
+
+    monkeypatch.setattr(storage, "init_storage", ret("s3"))
+    assert storage.storage_readiness() == "ok"
+
+    def raise_runtime(*a, **k):
+        raise RuntimeError("not configured")
+
+    monkeypatch.setattr(storage, "init_storage", raise_runtime)
+    assert storage.storage_readiness() == "unconfigured"
+
+    def raise_other(*a, **k):
+        raise ValueError("boom")
+
+    monkeypatch.setattr(storage, "init_storage", raise_other)
+    assert storage.storage_readiness() == "error"
+
+
+def test_readyz_storage_never_exposes_secrets(client, monkeypatch):
+    monkeypatch.setattr(storage, "storage_readiness", lambda: "ok")
+    body = client.get("/readyz").json()
+    assert body["storage"] in ("ok", "unconfigured", "error")
+    joined = client.get("/readyz").text.lower()
+    for needle in ("postgresql://", "s3:", "amazonaws", "bucket", "endpoint", "access_key", "secret", "dsn", "r2.cloudflarestorage"):
+        assert needle not in joined
