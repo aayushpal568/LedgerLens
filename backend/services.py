@@ -155,6 +155,53 @@ async def delete_client(user: AuthedUser, client_id: str, db=None) -> dict:
     return {"ok": True}
 
 
+async def purge_firm(user: AuthedUser, confirm: bool, db=None) -> dict:
+    """Permanently delete the caller's ENTIRE firm: every record + object (A7, self-service).
+
+    This is the tenant-wide counterpart to delete_client (which only cascades one client's
+    clients/files/scans/findings and leaves templates, agent history, users, and the firm
+    record behind). Strictly scoped to the caller's OWN firm_id — it can never target another
+    tenant. Destructive and irreversible, so an explicit `confirm` is required. Deleting the
+    firm's users also revokes their sessions (auth revalidates token_version against the DB).
+    """
+    if not confirm:
+        raise HTTPException(400, "Set confirm=true to permanently delete this firm and ALL of its data. This cannot be undone.")
+
+    database = _get_db(db)
+    firm = await database.firm.find_one({"id": user.firm_id})
+    if not firm:
+        raise HTTPException(404, "Firm not found")
+
+    # Atomically remove every firm-scoped record + the firm document; returns removed counts
+    # and the storage paths of the firm's files (collected before the delete committed).
+    result = await database.purge_firm_data(user.firm_id)
+
+    # Purge backing objects AFTER the DB delete committed (no dangling DB references). Failures
+    # are logged and counted, not raised — orphaned objects are a cost/privacy cleanup, not a
+    # correctness break, and can be retried by an operator.
+    storage_failures = 0
+    for sp in result.get("storage_paths", []):
+        try:
+            await asyncio.to_thread(storage.delete_object, sp)
+        except Exception as e:  # noqa: BLE001
+            storage_failures += 1
+            logger.warning("firm purge %s: failed to delete storage object %s: %s", user.firm_id, sp, e)
+
+    counts = result.get("counts", {})
+    total_objects = len(result.get("storage_paths", []))
+    logger.warning(
+        "Firm %s purged: collections=%s objects=%d failures=%d", user.firm_id, counts, total_objects, storage_failures
+    )
+    return {
+        "ok": True,
+        "firm_id": user.firm_id,
+        "removed": counts,
+        "objects_purged": total_objects - storage_failures,
+        "storage_failures": storage_failures,
+        "message": "Firm and all associated data permanently deleted.",
+    }
+
+
 # ----------------------------- File Services -----------------------------
 async def list_files(user: AuthedUser, client_id: str, db=None, limit: Optional[int] = None, offset: Optional[int] = None) -> List[dict]:
     """List active non-deleted files for a client (optional limit/offset page; default = all)."""

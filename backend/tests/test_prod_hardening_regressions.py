@@ -447,3 +447,147 @@ def test_lease_heartbeat_stops_when_ownership_lost(monkeypatch):
         ev.set()
         await asyncio.gather(task, return_exceptions=True)
     asyncio.run(_t())
+
+
+# =========================================================================
+# A7 — firm / account-wide purge (all collections + storage + session revoke)
+# =========================================================================
+from fastapi import HTTPException  # noqa: E402
+
+
+def _a7_user():
+    return AuthedUser(user_id=f"usr-{uuid.uuid4().hex[:8]}", firm_id=f"firm-{uuid.uuid4().hex[:8]}", token_version=1)
+
+
+def _seed_full_firm(db, u):
+    """Insert one doc into every firm-scoped collection for this user's firm (ids unique per firm)."""
+    tok = u.firm_id.split("-")[-1]  # short unique token so docs never collide across firms
+    ids = {
+        "client": f"c-{tok}", "file1": f"f1-{tok}", "file2": f"f2-{tok}", "scan": f"s-{tok}",
+        "finding": f"fd-{tok}", "template": f"t-{tok}", "thread": f"th-{tok}",
+        "message": f"m-{tok}", "run": f"r-{tok}", "step": f"rs-{tok}", "approval": f"ap-{tok}",
+    }
+
+    async def _t():
+        await db.firm.insert_one({"id": u.firm_id, "name": "F"})
+        await db.users.insert_one({"id": u.user_id, "firm_id": u.firm_id, "email": f"{u.user_id}@x.test"})
+        await db.clients.insert_one({"id": ids["client"], "firm_id": u.firm_id, "name": "co"})
+        await db.files.insert_many([
+            {"id": ids["file1"], "firm_id": u.firm_id, "client_id": ids["client"], "storage_path": f"acct-doc-checker/uploads/{tok}/f1.csv"},
+            {"id": ids["file2"], "firm_id": u.firm_id, "client_id": ids["client"], "storage_path": f"acct-doc-checker/uploads/{tok}/f2.csv"},
+        ])
+        await db.scans.insert_one({"id": ids["scan"], "firm_id": u.firm_id, "client_id": ids["client"]})
+        await db.findings.insert_one({"id": ids["finding"], "firm_id": u.firm_id, "scan_id": ids["scan"]})
+        await db.templates.insert_one({"id": ids["template"], "firm_id": u.firm_id, "name": "tpl"})
+        await db.agent_threads.insert_one({"id": ids["thread"], "firm_id": u.firm_id})
+        await db.agent_messages.insert_one({"id": ids["message"], "firm_id": u.firm_id, "thread_id": ids["thread"]})
+        await db.agent_runs.insert_one({"id": ids["run"], "firm_id": u.firm_id, "thread_id": ids["thread"]})
+        await db.agent_run_steps.insert_one({"id": ids["step"], "firm_id": u.firm_id, "run_id": ids["run"]})
+        await db.agent_approvals.insert_one({"id": ids["approval"], "firm_id": u.firm_id, "run_id": ids["run"]})
+    asyncio.run(_t())
+    return ids
+
+
+def test_purge_firm_removes_every_collection():
+    db = server.db
+    u = _a7_user()
+    _seed_full_firm(db, u)
+
+    result = asyncio.run(services.purge_firm(u, confirm=True, db=db))
+    assert result["ok"] is True
+    removed = result["removed"]
+    assert removed.get("clients") == 1
+    assert removed.get("files") == 2
+    assert removed.get("findings") == 1
+    assert removed.get("templates") == 1
+    assert removed.get("agent_threads") == 1
+    assert removed.get("agent_messages") == 1
+    assert removed.get("agent_runs") == 1
+    assert removed.get("agent_run_steps") == 1
+    assert removed.get("agent_approvals") == 1
+    assert removed.get("users") == 1
+    assert removed.get("firm") == 1
+    assert result["storage_failures"] == 0
+    assert result["objects_purged"] == 2
+
+    async def _assert_empty():
+        for col in ("clients", "files", "scans", "findings", "templates",
+                    "agent_threads", "agent_messages", "agent_runs", "agent_run_steps", "agent_approvals"):
+            leftover = await getattr(db, col).find({"firm_id": u.firm_id}).to_list(100)
+            assert leftover == [], f"{col} not purged"
+        assert await db.users.find_one({"id": u.user_id}) is None
+        assert await db.firm.find_one({"id": u.firm_id}) is None
+    asyncio.run(_assert_empty())
+
+
+def test_purge_firm_requires_confirmation():
+    db = server.db
+    u = _a7_user()
+    _seed_full_firm(db, u)
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(services.purge_firm(u, confirm=False, db=db))
+    assert exc.value.status_code == 400
+
+    async def _still_there():
+        return await db.clients.find({"firm_id": u.firm_id}).to_list(100)
+    assert asyncio.run(_still_there()) != [], "data must survive a non-confirmed purge attempt"
+
+    # Clean up so this firm's docs don't leak into later tests.
+    asyncio.run(services.purge_firm(u, confirm=True, db=db))
+
+
+def test_purge_firm_is_tenant_isolated():
+    db = server.db
+    a = _a7_user()
+    b = _a7_user()
+    _seed_full_firm(db, a)
+    _seed_full_firm(db, b)
+
+    asyncio.run(services.purge_firm(a, confirm=True, db=db))
+
+    async def _check():
+        a_clients = await db.clients.find({"firm_id": a.firm_id}).to_list(100)
+        b_clients = await db.clients.find({"firm_id": b.firm_id}).to_list(100)
+        assert a_clients == [], "purged firm A must be empty"
+        assert len(b_clients) == 1, "firm B must be untouched"
+        assert await db.firm.find_one({"id": b.firm_id}) is not None, "firm B record must remain"
+        assert await db.users.find_one({"id": b.user_id}) is not None, "firm B user must remain"
+    asyncio.run(_check())
+    asyncio.run(services.purge_firm(b, confirm=True, db=db))
+
+
+def test_delete_firm_route_purges_and_revokes_session(client):
+    email = f"a7_{uuid.uuid4().hex[:8]}@example.com"
+    r = client.post("/api/auth/signup", json={"email": email, "password": "SecurePass123!", "firm_name": "A7 Firm", "name": "A7"})
+    assert r.status_code == 201
+    tok = r.json()["access_token"]
+    firm_id = r.json()["firm"]["id"]
+    hdr = {"Authorization": f"Bearer {tok}"}
+
+    cid = client.post("/api/clients", headers=hdr, json={"name": "A7 Co", "client_type": "Small Business"}).json()["id"]
+    up = client.post(f"/api/clients/{cid}/files", headers=hdr,
+                     files=[("files", ("a.csv", b"Account,Debit,Credit\n1000,500,0\n", "text/csv"))])
+    assert up.status_code == 200, up.text
+
+    file_doc = asyncio.run(server.db.files.find_one({"client_id": cid}, {"_id": 0}))
+    sp = file_doc["storage_path"]
+    assert storage.get_object(sp)  # object exists before purge
+
+    # confirm=false -> 400, nothing deleted
+    bad = client.request("DELETE", "/api/firm", headers=hdr, json={"confirm": False})
+    assert bad.status_code == 400
+    assert len(client.get("/api/clients", headers=hdr).json()) == 1
+
+    # confirm=true -> 200, purged
+    ok = client.request("DELETE", "/api/firm", headers=hdr, json={"confirm": True})
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["ok"] is True
+
+    # Same bearer now rejected: the user row (and token_version anchor) is gone.
+    assert client.get("/api/firm", headers=hdr).status_code == 401
+
+    # Firm gone from the DB and the backing object was purged.
+    assert asyncio.run(server.db.firm.find_one({"id": firm_id})) is None
+    with pytest.raises(FileNotFoundError):
+        storage.get_object(sp)

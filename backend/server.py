@@ -145,6 +145,11 @@ class FirmUpdate(BaseModel):
     settings: Optional[dict] = None
 
 
+class FirmPurgeRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    confirm: bool = False  # A7: explicit confirmation required to irreversibly delete the firm
+
+
 class ClientCreate(BaseModel):
     name: str
     client_type: str = "Small Business"
@@ -203,6 +208,11 @@ async def get_firm(current_user: AuthedUser = Depends(get_current_user)):
 @api_router.put("/firm")
 async def update_firm(body: FirmUpdate, current_user: AuthedUser = Depends(get_current_user)):
     return await services.update_firm(current_user, body.model_dump(), db=db)
+
+
+@api_router.delete("/firm")
+async def purge_firm(body: FirmPurgeRequest, current_user: AuthedUser = Depends(get_current_user)):
+    return await services.purge_firm(current_user, confirm=body.confirm, db=db)
 
 
 # ---------------------------- clients ------------------------------

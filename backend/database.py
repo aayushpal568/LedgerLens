@@ -34,6 +34,14 @@ def _parse_iso(value: Any) -> Optional[datetime]:
         return None
 
 
+def _sql_rowcount(status: str) -> int:
+    """Parse the affected-row count from an asyncpg command status string, e.g. 'DELETE 5' -> 5."""
+    try:
+        return int(str(status).split()[-1])
+    except (ValueError, IndexError, AttributeError):
+        return 0
+
+
 # Default lease/recovery tuning for durable agent runs (overridable via env at service layer).
 DEFAULT_AGENT_LEASE_SECONDS = 120
 DEFAULT_AGENT_MAX_ATTEMPTS = 3
@@ -646,6 +654,40 @@ class PostgresDatabase:
                     await conn.execute("DELETE FROM files WHERE (doc->>'client_id') = $1", client_id)
                     await conn.execute("DELETE FROM clients WHERE id = $1", client_id)
 
+    async def purge_firm_data(self, firm_id: str) -> dict:
+        """Atomically delete ALL of a firm's data across every collection + the firm record.
+
+        Unlike delete_client_cascade (clients/files/scans/findings only), this removes the
+        entire tenant: templates, agent threads/messages/runs/steps/approvals, all users, and
+        the firm document. Returns per-collection delete counts and the removed files' storage
+        paths so the caller can delete the backing objects AFTER this transaction commits (no
+        dangling DB references, worst case orphaned objects which are logged + retried).
+        """
+        firm_id = str(firm_id)
+        counts: Dict[str, int] = {}
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                rows = await conn.fetch(
+                    "SELECT doc->>'storage_path' AS sp FROM files WHERE (doc->>'firm_id') = $1", firm_id
+                )
+                storage_paths = [r["sp"] for r in rows if r["sp"]]
+
+                for col in COLLECTIONS:
+                    if col in ("firm", "users"):
+                        continue
+                    table = _validate_identifier(col)
+                    status = await conn.execute(
+                        f"DELETE FROM {table} WHERE (doc->>'firm_id') = $1", firm_id
+                    )
+                    counts[col] = _sql_rowcount(status)
+
+                counts["users"] = _sql_rowcount(
+                    await conn.execute("DELETE FROM users WHERE (doc->>'firm_id') = $1", firm_id)
+                )
+                counts["firm"] = _sql_rowcount(await conn.execute("DELETE FROM firm WHERE id = $1", firm_id))
+
+        return {"counts": counts, "storage_paths": storage_paths}
+
     @staticmethod
     def _doc_from_row(row) -> dict:
         return json.loads(row["doc"]) if isinstance(row["doc"], str) else dict(row["doc"])
@@ -1169,6 +1211,38 @@ class MemoryDatabase:
                 if client_id in clients_col:
                     if not firm_id or clients_col[client_id].get("firm_id") == str(firm_id):
                         clients_col.pop(client_id, None)
+            except Exception:
+                self._data.update(backup)
+                raise
+
+    async def purge_firm_data(self, firm_id: str) -> dict:
+        """Atomically delete ALL of a firm's data across every collection + the firm record.
+
+        Removes clients, files, scans, findings, templates, all agent_* collections, the firm's
+        users, and the firm document. Returns per-collection delete counts and the removed files'
+        storage paths for the caller to purge from object storage after this succeeds. Storage
+        objects are NOT touched here (service-layer concern, mirrors the Postgres method).
+        """
+        firm_id = str(firm_id)
+        with self._lock:
+            backup = {col: dict(self._data.get(col, {})) for col in COLLECTIONS}
+            try:
+                storage_paths = [
+                    f.get("storage_path")
+                    for f in self._data.get("files", {}).values()
+                    if str(f.get("firm_id")) == firm_id and f.get("storage_path")
+                ]
+                counts: Dict[str, int] = {}
+                for col in COLLECTIONS:
+                    col_data = self._data.get(col, {})
+                    if col == "firm":
+                        counts[col] = 1 if firm_id in col_data else 0
+                        col_data.pop(firm_id, None)
+                    else:
+                        keep = {k: v for k, v in col_data.items() if str(v.get("firm_id")) != firm_id}
+                        counts[col] = len(col_data) - len(keep)
+                        self._data[col] = keep
+                return {"counts": counts, "storage_paths": [p for p in storage_paths if p]}
             except Exception:
                 self._data.update(backup)
                 raise
