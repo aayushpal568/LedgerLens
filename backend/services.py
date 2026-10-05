@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import logging
 import os
 import tempfile
+import time
 from typing import Any, Dict, List, Optional
 import uuid
 
@@ -23,6 +24,38 @@ import storage
 logger = logging.getLogger(__name__)
 
 CANCEL_REQUESTS: set = set()
+
+# -------------------------- O-scan limits (F1 concurrency + F2 duration) --------------------------
+# Conservative, env-tunable guards so a single tenant cannot exhaust the shared asyncio worker
+# thread pool or the asyncpg connection pool. These bound CONCURRENT in-flight scan work (the
+# existing per-firm sliding-window limiter still bounds arrival RATE). Normal scans are unaffected.
+SCAN_MAX_CONCURRENCY = int(os.environ.get("SCAN_MAX_CONCURRENCY", "4"))                     # global
+SCAN_MAX_CONCURRENCY_PER_FIRM = int(os.environ.get("SCAN_MAX_CONCURRENCY_PER_FIRM", "2"))   # per firm
+SCAN_MAX_SECONDS = int(os.environ.get("SCAN_MAX_SECONDS", "900"))                           # per-scan wall clock
+
+# Strong references to in-flight _run_scan tasks: prevents the asyncio GC/unretrieved-exception
+# footgun on bare create_task and gives an observable active-scan count. Cleared via done callback.
+_ACTIVE_SCAN_TASKS: set = set()
+
+# asyncio.Semaphore binds to the running loop, so cache per-loop instances to stay correct when
+# multiple event loops are used (e.g. tests calling asyncio.run repeatedly) without cross-loop reuse.
+_scan_sem_cache: dict = {}
+
+
+def _get_scan_sems(loop):
+    entry = _scan_sem_cache.get(loop)
+    if entry is None:
+        entry = {"global": asyncio.Semaphore(max(1, SCAN_MAX_CONCURRENCY)), "firms": {}}
+        _scan_sem_cache[loop] = entry
+    return entry
+
+
+def _get_firm_sem(entry, firm_id):
+    sem = entry["firms"].get(firm_id)
+    if sem is None:
+        sem = asyncio.Semaphore(max(1, SCAN_MAX_CONCURRENCY_PER_FIRM))
+        entry["firms"][firm_id] = sem
+    return sem
 
 # A3: explicit ceiling on the number of rows a single list/query fetch materializes into RAM.
 # The default preserves the previous implicit 100000-row behavior exactly; it is now a named,
@@ -318,12 +351,19 @@ async def delete_template(user: AuthedUser, template_id: str, db=None) -> dict:
 
 
 # ----------------------------- Scan Engine Helpers -----------------------------
-def _make_progress(scan_id: str, firm_id: str, loop, db):
-    """Build a thread-safe on_progress callback that streams progress to the DB."""
+def _make_progress(scan_id: str, firm_id: str, loop, db, deadline=None, timeout_flag=None):
+    """Build a thread-safe on_progress callback that streams progress to the DB.
+
+    Also enforces the O-scan F2 wall-clock deadline: once past it, flag the timeout and flip the
+    scan into the cancellation path so run_detection stops on its next check; the caller then
+    records a 'Scan exceeded maximum duration' error rather than a normal completion."""
     state = {"skipped": []}
 
     async def _push(processed, pct, skipped):
         try:
+            if deadline is not None and time.monotonic() > deadline and timeout_flag is not None:
+                timeout_flag["timed_out"] = True
+                CANCEL_REQUESTS.add(scan_id)
             doc = await db.scans.find_one({"id": scan_id, "firm_id": firm_id}, {"status": 1})
             if doc and doc.get("status") in ("cancelling", "cancelled"):
                 CANCEL_REQUESTS.add(scan_id)
@@ -400,7 +440,19 @@ async def _load_items(template_id: Optional[str], firm_id: str, db):
     return template["items"] if template else []
 
 
-async def _run_scan(
+async def _run_scan(scan_id, firm_id, client_id, template_id, expected_period, db):
+    """O-scan F1: bound CONCURRENT scan work with a global + per-firm semaphore.
+
+    A scan stays 'queued' until it acquires a slot (the inner body flips it to 'scanning'), so
+    hitting a limit back-pressures WITHOUT changing start_scan's response contract.
+    """
+    entry = _get_scan_sems(asyncio.get_running_loop())
+    firm_sem = _get_firm_sem(entry, firm_id)
+    async with entry["global"], firm_sem:
+        await _run_scan_inner(scan_id, firm_id, client_id, template_id, expected_period, db)
+
+
+async def _run_scan_inner(
     scan_id: str,
     firm_id: str,
     client_id: str,
@@ -410,6 +462,9 @@ async def _run_scan(
 ):
     """Download files from object storage to temp dir, invoke run_detection, and finalize."""
     tmpdir = tempfile.mkdtemp(prefix="scan_")
+    # O-scan F2: wall-clock deadline enforced between downloads and via the progress callback.
+    deadline = time.monotonic() + max(1, SCAN_MAX_SECONDS)
+    timeout_flag = {"timed_out": False}
     try:
         file_docs = await db.files.find(
             {"client_id": client_id, "firm_id": firm_id, "is_deleted": {"$ne": True}}
@@ -419,6 +474,9 @@ async def _run_scan(
         records = []
         download_failures = []
         for f in file_docs:
+            if time.monotonic() > deadline:
+                timeout_flag["timed_out"] = True
+                break
             fname = f.get("name") or f["id"]
             local_path = os.path.join(tmpdir, f"{f['id']}.{f.get('ext') or 'bin'}")
             data = None
@@ -448,16 +506,31 @@ async def _run_scan(
                 out.write(data)
             records.append({"id": f["id"], "name": f["name"], "ext": f["ext"], "size": f["size"], "path": local_path})
 
+        if timeout_flag["timed_out"]:
+            logger.warning("scan %s: exceeded maximum duration during downloads; aborting", scan_id)
+            await db.scans.update_one(
+                {"id": scan_id, "firm_id": firm_id},
+                {"$set": {"status": "error", "error": "Scan exceeded maximum duration.", "completed_at": now_iso()}},
+            )
+            return
+
         items = await _load_items(template_id, firm_id, db)
         await db.scans.update_one(
             {"id": scan_id, "firm_id": firm_id},
             {"$set": {"status": "scanning", "total_files": len(records), "processed_files": 0, "progress": 0}},
         )
-        on_progress = _make_progress(scan_id, firm_id, asyncio.get_event_loop(), db)
+        on_progress = _make_progress(scan_id, firm_id, asyncio.get_event_loop(), db, deadline=deadline, timeout_flag=timeout_flag)
         result = await asyncio.to_thread(
             run_detection, records, items, expected_period, on_progress,
             lambda: scan_id in CANCEL_REQUESTS,
         )
+        if timeout_flag["timed_out"]:
+            logger.warning("scan %s: exceeded maximum duration during detection; aborting", scan_id)
+            await db.scans.update_one(
+                {"id": scan_id, "firm_id": firm_id},
+                {"$set": {"status": "error", "error": "Scan exceeded maximum duration.", "completed_at": now_iso()}},
+            )
+            return
         # Surface documents we could not read from storage as skipped (same {name, reason}
         # shape the engine uses), so firms see why a file was excluded instead of a silent gap.
         if download_failures:
@@ -542,7 +615,12 @@ async def start_scan(
         "started_at": now_iso(),
     }
     await database.scans.insert_one(dict(scan))
-    asyncio.create_task(_run_scan(scan["id"], user.firm_id, client_id, template_id, expected_period, database))
+    # O-scan F1: retain a strong reference to the in-flight task (avoids the asyncio GC /
+    # unretrieved-exception footgun and yields an observable active-scan count); the done
+    # callback clears it. Response contract is unchanged.
+    task = asyncio.create_task(_run_scan(scan["id"], user.firm_id, client_id, template_id, expected_period, database))
+    _ACTIVE_SCAN_TASKS.add(task)
+    task.add_done_callback(_ACTIVE_SCAN_TASKS.discard)
     return clean(scan)
 
 
