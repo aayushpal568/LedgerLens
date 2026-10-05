@@ -591,3 +591,44 @@ def test_delete_firm_route_purges_and_revokes_session(client):
     assert asyncio.run(server.db.firm.find_one({"id": firm_id})) is None
     with pytest.raises(FileNotFoundError):
         storage.get_object(sp)
+
+
+# =========================================================================
+# A10 — report 'Generated' timestamp is timezone-aware (UTC), not naive
+# =========================================================================
+import re  # noqa: E402
+from engine import report as report_engine  # noqa: E402
+
+
+def test_generated_stamp_renders_given_utc_datetime():
+    stamp = report_engine._generated_stamp(dt.datetime(2024, 1, 2, 3, 4, 5, tzinfo=dt.timezone.utc))
+    assert stamp == "2024-01-02 03:04 UTC"
+
+
+def test_generated_stamp_naive_input_treated_as_utc():
+    stamp = report_engine._generated_stamp(dt.datetime(2020, 5, 6, 7, 8))
+    assert stamp == "2020-05-06 07:08 UTC"
+
+
+def test_generated_stamp_default_is_utc_labelled():
+    stamp = report_engine._generated_stamp()
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC", stamp), stamp
+
+
+def test_to_pdf_uses_utc_stamp_and_preserves_format(monkeypatch):
+    calls = []
+    orig = report_engine._generated_stamp
+
+    def spy(now=None):
+        calls.append(now)
+        return orig(now)
+
+    monkeypatch.setattr(report_engine, "_generated_stamp", spy)
+    findings = [{
+        "category": "missing_doc", "title": "Missing invoice", "files": [{"name": "a.csv"}],
+        "confidence": 90, "confidence_level": "high", "status": "unreviewed",
+    }]
+    data = report_engine.to_pdf(findings, {"client_name": "ACME", "expected_period": 2024})
+    assert isinstance(data, (bytes, bytearray))
+    assert data[:5] == b"%PDF-", "PDF output format must be preserved"
+    assert len(calls) >= 1, "the timestamp must be rendered via the tz-aware helper"

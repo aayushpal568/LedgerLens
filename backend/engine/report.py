@@ -4,8 +4,21 @@ Return raw bytes so the API can stream them. Framework-free.
 """
 import csv
 import io
-from datetime import datetime
+from datetime import datetime, timezone
 from xml.sax.saxutils import escape
+
+
+def _generated_stamp(now=None) -> str:
+    """Unambiguous, timezone-aware 'Generated' timestamp for the report header (A10).
+
+    Previously the PDF used a naive datetime.now() whose zone was undefined. We keep the same
+    human-readable shape but render in UTC and label it, so reviewers across time zones read the
+    same instant. ``now`` is an optional override for deterministic testing.
+    """
+    dt = now if now is not None else datetime.now(timezone.utc)
+    if dt.tzinfo is None:  # treat a naive input as UTC rather than local-ambiguous
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.strftime("%Y-%m-%d %H:%M UTC")
 
 CATEGORY_LABELS = {
     "exact_duplicate": "Exact Duplicate",
@@ -131,7 +144,7 @@ def to_pdf(findings, meta: dict) -> bytes:
         Paragraph(
             f"Client: {escape(str(meta.get('client_name', '-')))} &nbsp;&nbsp; "
             f"Period: {escape(str(meta.get('expected_period', '-')))} &nbsp;&nbsp; "
-            f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            f"Generated: {_generated_stamp()}",
             styles["Normal"],
         ),
         Spacer(1, 6),
