@@ -28,6 +28,10 @@ asyncpg>=0.29.0
 httpx>=0.27.0
 pymupdf>=1.24.0
 pillow>=10.0.0
+# PaddleOCR fix: paddleocr's compiled deps (pyclipper/shapely etc.) are built against NumPy 1.x;
+# `import paddleocr` SIGSEGVs under NumPy 2.x in the container even though `import paddle` works.
+# Pin NumPy <2 so the whole OCR stack uses a compatible ABI.
+numpy>=1.24,<2.0
 paddlepaddle>=2.6.0,<3.0.0
 paddleocr>=2.8.0,<3.0.0
 opencv-python>=4.10.0
