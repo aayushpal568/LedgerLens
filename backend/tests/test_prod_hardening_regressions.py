@@ -251,3 +251,100 @@ def test_forgot_password_throttled(client):
 def _run_async(value):
     """Await a coroutine if the collection returned one (memory/postgres parity)."""
     return asyncio.run(value) if asyncio.iscoroutine(value) else value
+
+
+# =========================================================================
+# A3 — read endpoints are bounded; default behavior is byte-for-byte unchanged
+# =========================================================================
+from auth_dep import AuthedUser  # noqa: E402
+
+
+def _a3_user():
+    return AuthedUser(user_id=f"usr-{uuid.uuid4().hex[:6]}", firm_id=f"firm-{uuid.uuid4().hex[:8]}", token_version=1)
+
+
+def test_list_files_pagination_default_unchanged():
+    async def _t():
+        db = server.db
+        u = _a3_user()
+        cid = f"client-{uuid.uuid4().hex[:8]}"
+        tok = uuid.uuid4().hex[:6]
+        ids = [f"{tok}{i}" for i in range(5)]
+        await db.clients.insert_one({"id": cid, "firm_id": u.firm_id, "name": "c"})
+        await db.files.insert_many([
+            {"id": ids[i], "firm_id": u.firm_id, "client_id": cid, "name": f"{i}.csv", "ext": "csv",
+             "size": 1, "storage_path": f"s/{i}", "is_deleted": False,
+             "uploaded_at": f"2024-01-01T00:00:{i:02d}+00:00"}
+            for i in range(5)
+        ])
+        desc = list(reversed(ids))  # uploaded_at asc -> sort desc = f4..f0
+
+        full = await services.list_files(u, cid, db=db)
+        assert [r["id"] for r in full] == desc, "default must be unchanged (all rows, uploaded_at desc)"
+
+        assert [r["id"] for r in await services.list_files(u, cid, db=db, limit=2)] == desc[:2]
+        assert [r["id"] for r in await services.list_files(u, cid, db=db, limit=2, offset=2)] == desc[2:4]
+        assert [r["id"] for r in await services.list_files(u, cid, db=db, limit=2, offset=4)] == desc[4:]
+        assert await services.list_files(u, cid, db=db, offset=99) == []
+        # Oversized limit clamps to the global cap and still returns everything.
+        assert [r["id"] for r in await services.list_files(u, cid, db=db, limit=10_000_000)] == desc
+    asyncio.run(_t())
+
+
+def test_list_files_respects_global_cap(monkeypatch):
+    monkeypatch.setattr(services, "MAX_ROWS_PER_QUERY", 3)
+
+    async def _t():
+        db = server.db
+        u = _a3_user()
+        cid = f"client-{uuid.uuid4().hex[:8]}"
+        tok = uuid.uuid4().hex[:6]
+        await db.clients.insert_one({"id": cid, "firm_id": u.firm_id, "name": "c"})
+        await db.files.insert_many([
+            {"id": f"{tok}{i}", "firm_id": u.firm_id, "client_id": cid, "name": f"{i}.csv", "ext": "csv",
+             "size": 1, "storage_path": f"s/{i}", "is_deleted": False,
+             "uploaded_at": f"2024-01-01T00:00:{i:02d}+00:00"}
+            for i in range(5)
+        ])
+        bounded = await services.list_files(u, cid, db=db)
+        assert len(bounded) == 3
+    asyncio.run(_t())
+
+
+def test_get_findings_pagination():
+    async def _t():
+        db = server.db
+        u = _a3_user()
+        sid = f"scan-{uuid.uuid4().hex[:8]}"
+        tok = uuid.uuid4().hex[:6]
+        await db.scans.insert_one({"id": sid, "firm_id": u.firm_id, "client_id": "c", "status": "completed"})
+        confs = [10, 20, 30, 40, 50]
+        fids = [f"{tok}f{i}" for i in range(5)]
+        await db.findings.insert_many([
+            {"id": fids[i], "firm_id": u.firm_id, "scan_id": sid, "category": "dup", "status": "unreviewed",
+             "confidence": confs[i], "note": ""}
+            for i in range(5)
+        ])
+        order = [fids[i] for i in sorted(range(5), key=lambda i: confs[i], reverse=True)]
+
+        assert [r["id"] for r in await services.get_findings(u, sid, db=db)] == order
+        assert [r["id"] for r in await services.get_findings(u, sid, db=db, limit=2)] == order[:2]
+        assert [r["id"] for r in await services.get_findings(u, sid, db=db, limit=2, offset=2)] == order[2:4]
+    asyncio.run(_t())
+
+
+def test_files_route_accepts_limit_offset(client):
+    email = f"a3_{uuid.uuid4().hex[:8]}@example.com"
+    r = client.post("/api/auth/signup", json={"email": email, "password": "SecurePass123!", "firm_name": "A3 Firm", "name": "A3"})
+    assert r.status_code == 201
+    hdr = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    cid = client.post("/api/clients", headers=hdr, json={"name": "A3 Co", "client_type": "Small Business"}).json()["id"]
+    for i in range(3):
+        up = client.post(f"/api/clients/{cid}/files", headers=hdr,
+                         files=[("files", (f"a{i}.csv", b"Account,Debit,Credit\n1000,500,0\n", "text/csv"))])
+        assert up.status_code == 200, up.text
+
+    assert len(client.get(f"/api/clients/{cid}/files", headers=hdr).json()) == 3
+    assert len(client.get(f"/api/clients/{cid}/files?limit=2", headers=hdr).json()) == 2
+    assert len(client.get(f"/api/clients/{cid}/files?limit=2&offset=3", headers=hdr).json()) == 0
+    assert len(client.get(f"/api/clients/{cid}/files?offset=1", headers=hdr).json()) == 2

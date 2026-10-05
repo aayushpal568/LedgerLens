@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException, Request, Depends, Header
+from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException, Request, Depends, Header, Query
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from starlette.middleware.cors import CORSMiddleware
@@ -228,8 +228,13 @@ async def delete_client(client_id: str, current_user: AuthedUser = Depends(get_c
 
 # ----------------------------- files -------------------------------
 @api_router.get("/clients/{client_id}/files")
-async def list_files(client_id: str, current_user: AuthedUser = Depends(get_current_user)):
-    return await services.list_files(current_user, client_id, db=db)
+async def list_files(
+    client_id: str,
+    limit: Optional[int] = Query(None, ge=1),
+    offset: Optional[int] = Query(None, ge=0),
+    current_user: AuthedUser = Depends(get_current_user),
+):
+    return await services.list_files(current_user, client_id, db=db, limit=limit, offset=offset)
 
 
 MAX_FILES_PER_BATCH = 20
@@ -406,9 +411,11 @@ async def get_findings(
     scan_id: str,
     category: Optional[str] = None,
     status: Optional[str] = None,
+    limit: Optional[int] = Query(None, ge=1),
+    offset: Optional[int] = Query(None, ge=0),
     current_user: AuthedUser = Depends(get_current_user),
 ):
-    return await services.get_findings(current_user, scan_id, category=category, status=status, db=db)
+    return await services.get_findings(current_user, scan_id, category=category, status=status, db=db, limit=limit, offset=offset)
 
 
 @api_router.patch("/findings/{finding_id}")
