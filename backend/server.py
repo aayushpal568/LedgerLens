@@ -602,9 +602,12 @@ async def app_root():
 
 @app.get("/healthz")
 async def health_check():
-    """Safe liveness and readiness probe for cloud orchestrators (Kubernetes, Render, Fly.io).
+    """Liveness probe: returns 200 whenever the process is up and able to respond.
 
-    Does NOT expose database credentials, secrets, or internal server paths.
+    Intentionally always 200 (the JSON body reports dependency state but the status code
+    never gates liveness), so orchestrators only restart on a genuine process failure. Use
+    GET /readyz for dependency-aware readiness (traffic-gating). Does NOT expose secrets or
+    internal server paths.
     """
     db_healthy = False
     if db is not None:
@@ -624,6 +627,29 @@ async def health_check():
         "service": "ledgerlens",
         "database": "connected" if db_healthy else "unreachable",
     }
+
+
+@app.get("/readyz")
+async def readiness_check():
+    """Readiness probe: 503 when the database (a hard dependency) is unreachable.
+
+    Separate from /healthz so a transient DB blip can gate traffic / mark the instance
+    not-ready without being read as a liveness failure. DB-gated only (storage is
+    intentionally not probed here — see B2). Exposes only coarse status; no secrets."""
+    db_healthy = False
+    if db is not None:
+        try:
+            await db.firm.count_documents({})
+            db_healthy = True
+        except Exception:
+            db_healthy = False
+
+    body = {
+        "status": "ready" if db_healthy else "not_ready",
+        "service": "ledgerlens",
+        "database": "connected" if db_healthy else "unreachable",
+    }
+    return JSONResponse(status_code=200 if db_healthy else 503, content=body)
 
 
 
