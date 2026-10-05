@@ -348,3 +348,102 @@ def test_files_route_accepts_limit_offset(client):
     assert len(client.get(f"/api/clients/{cid}/files?limit=2", headers=hdr).json()) == 2
     assert len(client.get(f"/api/clients/{cid}/files?limit=2&offset=3", headers=hdr).json()) == 0
     assert len(client.get(f"/api/clients/{cid}/files?offset=1", headers=hdr).json()) == 2
+
+
+# =========================================================================
+# A4 — a live worker's lease is renewed across a slow turn (no double-exec)
+# =========================================================================
+import json  # noqa: E402
+import agent.loop as agent_loop  # noqa: E402
+
+
+def _a4_user():
+    return AuthedUser(user_id=f"usr-{uuid.uuid4().hex[:6]}", firm_id=f"firm-{uuid.uuid4().hex[:8]}", token_version=1)
+
+
+class _SlowAsyncProvider:
+    """Async provider that blocks one turn for `sleep` seconds, then emits a final answer."""
+
+    def __init__(self, sleep: float, final_text: str = "done"):
+        self.sleep = sleep
+        self.final_text = final_text
+        self.calls = 0
+
+    async def generate(self, prompt, system_prompt=None, max_tokens=None, temperature=None, **kwargs):
+        self.calls += 1
+        await asyncio.sleep(self.sleep)
+        return json.dumps({"thought": "finish", "final": self.final_text})
+
+
+def test_live_worker_lease_survives_a_slow_turn(monkeypatch):
+    monkeypatch.setattr(services, "agent_lease_seconds", lambda: 3)
+
+    async def _t():
+        db = server.db
+        u = _a4_user()
+        thread_id = f"thr-{uuid.uuid4().hex[:8]}"
+        run_id = f"run-{uuid.uuid4().hex[:8]}"
+        await db.agent_threads.insert_one({"id": thread_id, "firm_id": u.firm_id, "created_at": services.now_iso()})
+        await db.agent_runs.insert_one({
+            "id": run_id, "firm_id": u.firm_id, "thread_id": thread_id, "status": "queued",
+            "created_by": u.user_id, "created_at": services.now_iso(), "started_at": None, "completed_at": None,
+            "attempt": 0, "worker_id": None, "lease_expires_at": None, "heartbeat_at": None, "metadata": {},
+        })
+
+        provider = _SlowAsyncProvider(sleep=4.0)  # single turn far longer than the 3s lease
+        task = asyncio.create_task(
+            agent_loop.run_agent_loop(u, run_id, thread_id, llm_provider=provider, db=db)
+        )
+
+        # While the ONLY turn is still blocked inside the provider (past the turn-boundary
+        # heartbeat), the background heartbeat must have kept the lease alive.
+        await asyncio.sleep(3.5)
+        rec = await services.recover_stale_agent_runs(db=db)
+        assert rec.get("requeued", 0) == 0, "live worker's run must NOT be requeued"
+        raw = await db.agent_runs.find_one({"id": run_id})
+        assert raw["status"] == "running"
+        assert raw["worker_id"] == services.WORKER_ID
+
+        # A second worker therefore cannot claim the still-live run.
+        second = await db.claim_agent_run(run_id, worker_id="worker-B", firm_id=str(u.firm_id), lease_seconds=3)
+        assert second is None, "a live-leased run must not be claimable by another worker"
+
+        result = await task
+        assert result["status"] == services.RUN_STATUS_COMPLETED
+        done = await db.agent_runs.find_one({"id": run_id})
+        assert done["status"] == services.RUN_STATUS_COMPLETED
+        assert not done.get("lease_expires_at"), "lease released on completion"
+        assert not done.get("worker_id"), "worker cleared on completion"
+    asyncio.run(_t())
+
+
+def test_lease_heartbeat_stops_when_ownership_lost(monkeypatch):
+    monkeypatch.setattr(services, "agent_lease_seconds", lambda: 3)
+
+    async def _t():
+        db = server.db
+        u = _a4_user()
+        run_id = f"run-{uuid.uuid4().hex[:8]}"
+        await db.agent_runs.insert_one({
+            "id": run_id, "firm_id": u.firm_id, "thread_id": "t", "status": "queued",
+            "created_at": services.now_iso(), "attempt": 0, "worker_id": None,
+            "lease_expires_at": None, "heartbeat_at": None, "metadata": {},
+        })
+        claimed = await services.claim_agent_run(u, run_id, db=db)
+        assert claimed is not None and claimed["status"] == "running"
+
+        ev = asyncio.Event()
+        task = asyncio.create_task(agent_loop._lease_heartbeat(u, run_id, db, interval_seconds=1, stop_event=ev))
+
+        await asyncio.sleep(1.6)  # at least one heartbeat tick
+        held = await db.agent_runs.find_one({"id": run_id})
+        assert held["worker_id"] == services.WORKER_ID and held["status"] == "running"
+        assert held.get("heartbeat_at")
+
+        # Lose ownership (e.g. cancelled/completed) -> heartbeat must self-terminate, not resurrect.
+        await db.agent_runs.update_one({"id": run_id}, {"$set": {"status": "completed"}})
+        await asyncio.sleep(1.3)
+        assert task.done(), "heartbeat should stop once the lease is no longer held"
+        ev.set()
+        await asyncio.gather(task, return_exceptions=True)
+    asyncio.run(_t())

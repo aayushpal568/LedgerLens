@@ -256,6 +256,35 @@ def format_turn_prompt(messages: List[Dict[str, Any]], steps: List[Dict[str, Any
     return "\n".join(lines)
 
 
+async def _lease_heartbeat(user, run_id, db, interval_seconds, stop_event):
+    """Renew this worker's lease on `run_id` for the FULL duration it owns the run.
+
+    Fixes A4 (double-execution): the in-loop heartbeat only fired at the TOP of each turn,
+    but a single turn can perform two 60s LLM calls plus a long-running tool, exceeding the
+    lease (default 120s) without any renewal. The lease then lapses while the worker is
+    genuinely alive, so recover_stale_agent_runs requeues it and a second worker claims the
+    same run -> concurrent double execution and duplicate assistant messages / side effects.
+
+    Renewal here is driven by a fixed wall-clock cadence (independent of turn/LLM/tool
+    boundaries), so a live worker can never be mistaken for dead. renew_agent_run_lease is
+    ownership-guarded (status==running AND worker_id matches), so the moment we lose the
+    lease we stop and never resurrect a run another worker now owns.
+    """
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
+        except asyncio.TimeoutError:
+            pass  # interval elapsed with no stop request -> renew now
+        if stop_event.is_set():
+            return
+        try:
+            still_held = await services.renew_agent_run_lease(user, run_id, db=db)
+        except Exception:  # transient DB hiccup -> next tick retries; do not crash the loop
+            continue
+        if not still_held:
+            return  # lost ownership (cancelled/completed/reclaimed) -> stop, never resurrect
+
+
 async def run_agent_loop(
     user: AuthedUser,
     run_id: str,
@@ -283,6 +312,10 @@ async def run_agent_loop(
     run_deadline = time.monotonic() + max(1, services.agent_run_timeout_seconds())
     max_output_tokens = services.agent_max_total_output_tokens()
     output_tokens_used = 0
+
+    # A4: background lease heartbeat (started once we own the run as 'running'; stopped in finally)
+    lease_hb_task = None
+    lease_hb_stop = None
 
     try:
         # 1b. Early in-process cancellation short-circuit (pre-dispatch)
@@ -351,6 +384,15 @@ async def run_agent_loop(
                 turn_steps.append({"type": "tool_result", "tool": inp.get("tool"), "result": outp})
 
         turn_count = 0
+
+        # A4: keep this worker's lease alive for the ENTIRE run (across turns / LLM calls /
+        # tools), on a fixed cadence independent of turn boundaries, so a slow turn can never
+        # let the lease lapse and let recover_stale_agent_runs reclaim a live worker's run.
+        _lease_seconds = max(1, services.agent_lease_seconds())
+        lease_hb_stop = asyncio.Event()
+        lease_hb_task = asyncio.create_task(
+            _lease_heartbeat(user, run_id, db, max(1, _lease_seconds // 3), lease_hb_stop)
+        )
 
         # 3. Agent execution loop
         while turn_count < MAX_CLAUDE_TURNS:
@@ -800,6 +842,15 @@ async def run_agent_loop(
 
 
     finally:
+        # A4: stop the lease heartbeat once we no longer own/execute the run.
+        if lease_hb_stop is not None:
+            lease_hb_stop.set()
+        if lease_hb_task is not None:
+            lease_hb_task.cancel()
+            try:
+                await lease_hb_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
         async with _RUN_LOCK:
             _ACTIVE_RUNS.discard(run_id)
             _CANCELLED_RUNS.discard(run_id)
