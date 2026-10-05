@@ -1098,6 +1098,58 @@ async def recover_stale_agent_runs(db=None) -> dict:
     return result
 
 
+async def recover_orphaned_scans(db=None, *, boot_ts=None, grace_seconds: int = 60) -> dict:
+    """F3 startup reconciliation of orphaned scans (queued/scanning/cancelling).
+
+    A scan interrupted by a process crash/restart is left stuck in a non-terminal state;
+    scans are NOT durable (no worker/lease by design), so we reclaim them once at boot:
+    any active scan that started strictly before (boot_ts - grace) is marked error with
+    "Scan interrupted by server restart". Conservative rules: an unparseable timestamp is
+    SKIPPED (never falsely failed); a scan started within the grace window is left alone
+    (protects live scans on this/another replica); each update is guarded individually so
+    one failure doesn't abort the batch. No periodic sweeper/heartbeat/lease is added."""
+    from datetime import timedelta
+    from database import _parse_iso
+
+    database = _get_db(db)
+    if boot_ts is None:
+        boot_ts = datetime.now(timezone.utc)
+    if boot_ts.tzinfo is None:
+        boot_ts = boot_ts.replace(tzinfo=timezone.utc)
+    grace = max(0, int(grace_seconds))
+    cutoff = boot_ts - timedelta(seconds=grace)
+
+    active = await database.scans.find(
+        {"status": {"$in": ["queued", "scanning", "cancelling"]}}
+    ).to_list(10000)
+
+    reconciled = 0
+    skipped = 0
+    for s in active:
+        raw = s.get("started_at") or s.get("created_at")
+        started = _parse_iso(raw)
+        if started is None:
+            skipped += 1  # unparseable -> leave untouched, never falsely fail a live scan
+            continue
+        if started >= cutoff:
+            continue  # recent enough -> may be a genuinely running scan; do not disturb
+        try:
+            await database.scans.update_one(
+                {"id": s["id"]},
+                {"$set": {
+                    "status": "error",
+                    "error": "Scan interrupted by server restart",
+                    "completed_at": now_iso(),
+                }},
+            )
+            reconciled += 1
+        except Exception:  # noqa: BLE001 - isolate per-scan failures
+            skipped += 1
+            logger.warning("orphan-scan reconcile failed for %s", s.get("id"), exc_info=True)
+
+    return {"reconciled": reconciled, "skipped": skipped}
+
+
 async def run_is_cancelled(run_id: str, user: Optional[AuthedUser] = None, db=None) -> bool:
     """Server-side cancellation check via persisted status (cross-process authoritative)."""
     import agent.loop as loop

@@ -18,6 +18,11 @@ import storage
 
 ROOT_DIR = Path(__file__).resolve().parent
 
+# F3: authoritative process boot instant, captured as early as possible at import so
+# orphan-scan reconciliation measures "started before this boot" from real startup time,
+# not from whenever the (potentially slow) startup handler later runs.
+_BOOT_TS = datetime.now(timezone.utc)
+
 try:
     from dotenv import load_dotenv
     load_dotenv(ROOT_DIR / ".env")
@@ -734,25 +739,13 @@ async def seed_defaults():
     except Exception as e:
         logger.warning("Durable agent run recovery skipped: %s", e)
 
+    # F3: reconcile scans orphaned by a prior crash/restart. Startup-only and conservative
+    # (see services.recover_orphaned_scans). Grace is measured from the real boot instant.
     try:
-        from datetime import timedelta
-        boot_cutoff = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
-
-        all_active_scans = await db.scans.find(
-            {"status": {"$in": ["queued", "scanning", "cancelling"]}}
-        ).to_list(10000)
-        orphaned_scans = [s for s in all_active_scans if (s.get("started_at") or s.get("created_at") or "") < boot_cutoff]
-        for s in orphaned_scans:
-            await db.scans.update_one(
-                {"id": s["id"]},
-                {"$set": {
-                    "status": "error",
-                    "error": "Scan interrupted by server restart",
-                    "completed_at": datetime.now(timezone.utc).isoformat(),
-                }},
-            )
-        if orphaned_scans:
-            logger.info("Reconciled %d orphaned scan(s) as error", len(orphaned_scans))
+        _orphan_grace = int(os.environ.get("SCAN_ORPHAN_GRACE_SECONDS", "60"))
+        scan_recovery = await services.recover_orphaned_scans(db=db, boot_ts=_BOOT_TS, grace_seconds=_orphan_grace)
+        if scan_recovery.get("reconciled") or scan_recovery.get("skipped"):
+            logger.info("Orphaned scan reconciliation on startup: %s (grace=%ss)", scan_recovery, _orphan_grace)
     except Exception as e:
         logger.warning("Orphaned scan reconciliation skipped: %s", e)
 
