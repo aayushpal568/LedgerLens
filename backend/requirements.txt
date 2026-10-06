@@ -28,13 +28,16 @@ asyncpg>=0.29.0
 httpx>=0.27.0
 pymupdf>=1.24.0
 pillow>=10.0.0
-# PaddleOCR fix: paddleocr's compiled deps (pyclipper/shapely etc.) are built against NumPy 1.x;
-# `import paddleocr` SIGSEGVs under NumPy 2.x in the container even though `import paddle` works.
-# Pin NumPy <2 so the whole OCR stack uses a compatible ABI.
+# PaddleOCR stack — verified working in the production-style Linux container
+# (import paddle/paddleocr OK, real CPU OCR OK, 100-page PDF: all pages, no SIGSEGV/OOM):
+#  - PaddlePaddle 3.0.0: the 2.6.2 cp311 wheel aborted/segfaulted at `import paddleocr`
+#    (zlib inflateReset2) in-container; PaddleOCR 2.10's supported pairing is PaddlePaddle 3.0.
+#  - NumPy <2: paddleocr's compiled deps (pyclipper/shapely) target the NumPy 1.x ABI.
+#  - opencv-python only: drop opencv-contrib-python (a second, conflicting cv2/libz copy).
+#  - protobuf 3.x on ALL platforms: Windows-only cap left the Linux container on protobuf 7.x.
 numpy>=1.24,<2.0
-paddlepaddle>=2.6.0,<3.0.0
+paddlepaddle>=3.0.0,<3.1.0
 paddleocr>=2.8.0,<3.0.0
 opencv-python>=4.10.0
-opencv-contrib-python>=4.10.0
-protobuf<=3.20.2,>=3.1.0; platform_system == "Windows"
+protobuf>=3.1.0,<=3.20.2
 
