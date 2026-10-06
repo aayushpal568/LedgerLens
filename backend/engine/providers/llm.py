@@ -243,6 +243,52 @@ class ClaudeOpusFalProvider(LLMProvider):
             return self._call_anthropic(prompt, system_prompt=system_prompt, temperature=temperature, max_tokens=max_tokens, timeout=timeout)
         return None
 
+    def _fal_openai_request(self, payload: Dict[str, Any], is_openai_compat: bool, target_url: str, timeout: Optional[int] = None) -> "tuple[Optional[str], bool]":
+        """Perform ONE fal request. Returns (content, empty_flag):
+        - (text, False) on success with content
+        - (None, True)  only when HTTP succeeded but content is empty/blank (retryable)
+        - (None, False) on any real error (auth/429/5xx/http error/timeout/parse) -> NOT retried
+        """
+        eff_timeout = timeout if timeout is not None else self._timeout
+        headers = {"Authorization": f"Key {self._fal_key}", "Content-Type": "application/json"}
+        try:
+            with httpx.Client(timeout=eff_timeout) as client:
+                res = client.post(target_url, json=payload, headers=headers)
+                if res.status_code in (401, 403):
+                    logger.error("fal.ai authentication failed (HTTP %d). Check FAL_KEY.", res.status_code)
+                    return None, False
+                if res.status_code == 429:
+                    logger.warning("fal.ai rate limit exceeded (HTTP 429).")
+                    return None, False
+                if res.status_code >= 500:
+                    logger.error("fal.ai server error (HTTP %d): %s", res.status_code, res.text[:200])
+                    return None, False
+                res.raise_for_status()
+                data = res.json()
+                if data.get("error"):
+                    logger.error("fal.ai error reported in response: %s", data["error"])
+                    return None, False
+                output = None
+                if is_openai_compat:
+                    choices = data.get("choices") or []
+                    if choices:
+                        output = (choices[0].get("message") or {}).get("content")
+                if output is None:
+                    output = data.get("output")
+                if output is not None and str(output).strip():
+                    return str(output).strip(), False
+                logger.warning("fal.ai returned HTTP success with empty content; will retry once")
+                return None, True
+        except httpx.TimeoutException:
+            logger.warning("fal.ai request timed out after %ds", eff_timeout)
+            return None, False
+        except httpx.HTTPStatusError as e:
+            logger.error("fal.ai HTTP error %s: %s", e.response.status_code, e.response.text[:200])
+            return None, False
+        except Exception as e:
+            logger.error("fal.ai unexpected request failure: %s", str(e))
+            return None, False
+
     def _call_fal(
         self,
         prompt: str,
@@ -251,91 +297,69 @@ class ClaudeOpusFalProvider(LLMProvider):
         max_tokens: Optional[int] = None,
         timeout: Optional[int] = None,
     ) -> Optional[str]:
-        """Invoke fal.ai inference endpoint (supports OpenRouter OpenAI-compatible and Any-LLM)."""
+        """Invoke fal.ai (OpenAI-compatible or Any-LLM), retrying once only on an empty HTTP-200."""
         is_openai_compat = ("openai" in self._endpoint) or ("openrouter" in self._endpoint) or ("chat/completions" in self._endpoint)
         target_url = self._endpoint
         if is_openai_compat and not target_url.endswith("/chat/completions"):
             target_url = f"{target_url}/chat/completions"
 
-        headers = {
-            "Authorization": f"Key {self._fal_key}",
-            "Content-Type": "application/json",
-        }
-
         eff_tokens = max_tokens if max_tokens is not None else self._max_tokens
-        eff_timeout = timeout if timeout is not None else self._timeout
-
         if is_openai_compat:
             messages: List[Dict[str, str]] = []
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
             messages.append({"role": "user", "content": prompt})
-            payload: Dict[str, Any] = {
-                "model": self._model,
-                "messages": messages,
-                "temperature": temperature,
-                "max_tokens": eff_tokens,
-            }
+            payload: Dict[str, Any] = {"model": self._model, "messages": messages, "temperature": temperature, "max_tokens": eff_tokens}
         else:
-            payload = {
-                "prompt": prompt,
-                "model": self._model,
-                "temperature": temperature,
-                "max_tokens": eff_tokens,
-                "priority": "latency",
-            }
+            payload = {"prompt": prompt, "model": self._model, "temperature": temperature, "max_tokens": eff_tokens, "priority": "latency"}
             if system_prompt:
                 payload["system_prompt"] = system_prompt
 
-        logger.info(
-            "Calling fal.ai Claude Opus endpoint %s with model %s (max_tokens=%d)",
-            target_url, self._model, eff_tokens,
-        )
+        logger.info("Calling fal.ai Claude Opus endpoint %s with model %s (max_tokens=%d)", target_url, self._model, eff_tokens)
+        eff_timeout = timeout if timeout is not None else self._timeout
+        content, empty = self._fal_openai_request(payload, is_openai_compat, target_url, timeout=eff_timeout)
+        if empty:
+            content, _ = self._fal_openai_request(payload, is_openai_compat, target_url, timeout=eff_timeout)  # single retry, same request
+        return content
 
-        try:
-            with httpx.Client(timeout=eff_timeout) as client:
-                res = client.post(target_url, json=payload, headers=headers)
-                if res.status_code in (401, 403):
-                    logger.error("fal.ai authentication failed (HTTP %d). Check FAL_KEY.", res.status_code)
-                    return None
-                if res.status_code == 429:
-                    logger.warning("fal.ai rate limit exceeded (HTTP 429).")
-                    return None
-                if res.status_code >= 500:
-                    logger.error("fal.ai server error (HTTP %d): %s", res.status_code, res.text[:200])
-                    return None
+    def generate_multimodal(
+        self,
+        prompt: str,
+        images: List["tuple[str, str]"],
+        system_prompt: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        timeout: Optional[int] = None,
+    ) -> Optional[str]:
+        """Send a real document (as image data-URL parts) to Claude over the OpenAI-compatible route.
 
-                res.raise_for_status()
-                data = res.json()
-
-                if data.get("error"):
-                    logger.error("fal.ai error reported in response: %s", data["error"])
-                    return None
-
-                output = None
-                if is_openai_compat:
-                    choices = data.get("choices") or []
-                    if choices:
-                        msg = choices[0].get("message") or {}
-                        output = msg.get("content")
-                if output is None:
-                    output = data.get("output")
-
-                if output is not None:
-                    return str(output).strip()
-
-                logger.warning("fal.ai response did not contain message/output content: %s", list(data.keys()))
-                return None
-
-        except httpx.TimeoutException:
-            logger.warning("fal.ai request timed out after %ds", eff_timeout)
+        `images` is a list of (mime, base64) tuples. Only supported when a fal key is configured and
+        the endpoint is OpenAI-compatible (which is the path that accepts image_url content). Applies
+        the same single retry on an empty HTTP-200. Never logs credentials.
+        """
+        if not self.available or not self._fal_key or not images:
             return None
-        except httpx.HTTPStatusError as e:
-            logger.error("fal.ai HTTP error %s: %s", e.response.status_code, e.response.text[:200])
+        is_openai_compat = ("openai" in self._endpoint) or ("openrouter" in self._endpoint) or ("chat/completions" in self._endpoint)
+        if not is_openai_compat:
+            logger.warning("generate_multimodal requires an OpenAI-compatible endpoint; current endpoint does not accept image input.")
             return None
-        except Exception as e:
-            logger.error("fal.ai unexpected request failure: %s", str(e))
-            return None
+        target_url = self._endpoint
+        if not target_url.endswith("/chat/completions"):
+            target_url = f"{target_url}/chat/completions"
+        content_parts: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
+        for mime, b64 in images:
+            content_parts.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+        messages: List[Dict[str, Any]] = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": content_parts})
+        eff_tokens = max_tokens if max_tokens is not None else self._max_tokens
+        payload: Dict[str, Any] = {"model": self._model, "messages": messages, "temperature": 0.0, "max_tokens": eff_tokens}
+        logger.info("Sending multimodal document request to fal.ai (%d image part(s)), model %s", len(images), self._model)
+        eff_timeout = timeout if timeout is not None else self._timeout
+        content, empty = self._fal_openai_request(payload, True, target_url, timeout=eff_timeout)
+        if empty:
+            content, _ = self._fal_openai_request(payload, True, target_url, timeout=eff_timeout)
+        return content
 
     def _call_anthropic(
         self,

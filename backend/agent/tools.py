@@ -6,9 +6,13 @@ Guarantees:
 - Results are strictly sanitized: NO raw OCR/text, NO internal paths, NO secrets.
 - All operations are tenant-scoped via services.py and scoped().
 """
+import asyncio
+import base64
+import os
 from collections import Counter
 from typing import Any, Dict, List, Optional
 
+import storage
 from auth_dep import AuthedUser
 import services
 from agent.registry import Tool, ToolRegistry, default_registry
@@ -519,6 +523,97 @@ async def handle_set_finding_review(user: AuthedUser, args: Dict[str, Any], db=N
 
 
 # ---------------------------------------------------------------------------
+# 11. analyze_document — send the firm's OWN single document to Claude as image input
+# ---------------------------------------------------------------------------
+ANALYZE_DOCUMENT_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "file_id": {"type": "string", "description": "ID of a file belonging to this firm to analyze."},
+        "question": {"type": "string", "description": "What to extract or assess from the document (optional)."},
+    },
+    "required": ["file_id"],
+    "additionalProperties": False,
+}
+
+_IMAGE_EXTS = {"png", "jpg", "jpeg", "webp", "bmp", "tiff", "tif"}
+_DOC_CLAUDE_MAX_BYTES = int(os.environ.get("DOC_CLAUDE_MAX_BYTES", str(20 * 1024 * 1024)))   # 20 MB input cap
+_DOC_CLAUDE_MAX_PAGES = int(os.environ.get("DOC_CLAUDE_MAX_PAGES", "8"))                      # PDF pages sent to Claude
+_DOC_CLAUDE_MAX_B64 = int(os.environ.get("DOC_CLAUDE_MAX_B64", str(12 * 1024 * 1024)))        # base64 payload cap
+
+
+def _build_document_images(data: bytes, ext: str) -> "list[tuple[str,str]]":
+    """Return list[(mime, base64)] image parts for Claude. Images pass through; PDFs render
+    to PNG up to a page/byte cap. Raises ValueError on unsupported type or oversize input."""
+    ext = (ext or "").lower().lstrip(".")
+    if len(data) > _DOC_CLAUDE_MAX_BYTES:
+        raise ValueError("Document too large to analyze.")
+    if ext in _IMAGE_EXTS:
+        return [(storage.mime_for(ext) if ext != "tif" else "image/tiff", base64.b64encode(data).decode())]
+    if ext == "pdf":
+        import fitz  # PyMuPDF — same renderer used by the OCR path
+        images: "list[tuple[str,str]]" = []
+        total = 0
+        doc = fitz.open(stream=data, filetype="pdf")
+        try:
+            for i in range(min(len(doc), _DOC_CLAUDE_MAX_PAGES)):
+                pix = doc.load_page(i).get_pixmap(dpi=130)
+                png = pix.tobytes("png")
+                b64 = base64.b64encode(png).decode()
+                total += len(b64)
+                if total > _DOC_CLAUDE_MAX_B64:
+                    break
+                images.append(("image/png", b64))
+        finally:
+            doc.close()
+        if not images:
+            raise ValueError("No pages to analyze.")
+        return images
+    raise ValueError("analyze_document supports image and PDF documents only.")
+
+
+async def handle_analyze_document(user: AuthedUser, args: Dict[str, Any], db=None) -> Dict[str, Any]:
+    """Analyze ONE of the authenticated firm's documents by sending it to Claude as image input.
+
+    Tenant-scoped (404 if the file is not this firm's). Sends only the requested file. Keeps the
+    deterministic engine and PaddleOCR intact; this is an additional AI path. Returns no paths/secrets.
+    """
+    from fastapi import HTTPException
+    file_id = str(args.get("file_id", "")).strip()
+    question = str(args.get("question") or "Summarize this document and list key accounting line items, dates, and amounts.").strip()
+    if not file_id:
+        raise HTTPException(400, "file_id is required")
+
+    database = services._get_db(db)
+    from db_access import scoped
+    doc = await database.files.find_one(scoped(database.files, user, {"id": file_id}))  # firm-scoped; else None
+    if not doc:
+        raise HTTPException(404, "File not found")  # also blocks other-firm files
+    sp = doc.get("storage_path")
+    ext = doc.get("ext") or ""
+    if not sp:
+        raise HTTPException(400, "File has no stored content")
+
+    data = await asyncio.to_thread(storage.get_object, sp)
+    try:
+        images = _build_document_images(data, ext)
+    except ValueError as ve:
+        raise HTTPException(400, str(ve))
+
+    from engine.providers.llm import ClaudeOpusFalProvider
+    provider = ClaudeOpusFalProvider()
+    if not provider.available:
+        return {"file_id": file_id, "analysis": "", "note": "AI provider not configured (FAL_KEY missing)."}
+    analysis = await asyncio.to_thread(provider.generate_multimodal, question, images, None, 1024)
+    return {
+        "file_id": file_id,
+        "filename": doc.get("name"),
+        "pages_sent": len(images),
+        "analysis": (analysis or "").strip(),
+        "note": "" if analysis else "AI provider returned no content.",
+    }
+
+
+# ---------------------------------------------------------------------------
 # Tool Lists & Registration Helpers
 # ---------------------------------------------------------------------------
 READ_ONLY_TOOLS = [
@@ -583,6 +678,18 @@ READ_ONLY_TOOLS = [
         description="Generate a formatted export report (CSV, XLSX, or PDF) for a completed audit scan and return a secure download link.",
         parameters=EXPORT_REPORT_SCHEMA,
         handler=handle_export_report,
+        read_only=True,
+        approval_required=False,
+    ),
+    Tool(
+        name="analyze_document",
+        description=(
+            "Analyze a single document (image or PDF) that belongs to this firm by sending the actual "
+            "file to Claude for vision-based analysis. Returns Claude's analysis text. Use only for the "
+            "specific file the user asks about; never bulk-analyzes. Does not require human approval (read-only)."
+        ),
+        parameters=ANALYZE_DOCUMENT_SCHEMA,
+        handler=handle_analyze_document,
         read_only=True,
         approval_required=False,
     ),

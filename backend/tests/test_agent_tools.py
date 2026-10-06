@@ -60,6 +60,7 @@ EXPECTED_READ_ONLY_TOOLS = {
     "summarize_findings",
     "get_agent_run_status",
     "export_report",
+    "analyze_document",
 }
 
 EXPECTED_ACTION_TOOLS = {
